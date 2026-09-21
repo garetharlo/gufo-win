@@ -29,16 +29,19 @@
     "variant": "q4"
   },
   "notes": [
-    "llama.cpp: version: 10273 (a6aa6f5)",
-    "peak device-wide VRAM use sampled with rocm-smi every 250 ms during the request"
+    "llama.cpp: version: 0.4.1-dev (build 11069, commit )",
+    "peak device-wide VRAM + GTT use sampled with rocm-smi every 250 ms during the request",
+    "server mode: ar"
   ],
   "referenceName": "llama.cpp",
   "rows": {
     "16K prefix, pp4096 + tg128": {
-      "gib": 32.37
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 262144 -np 1 --port 58297 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
+      "gib": 32.68
     },
     "pp2048 + tg128": {
-      "gib": 32.37
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 262144 -np 1 --port 58297 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
+      "gib": 32.68
     }
   },
   "schemaVersion": 1,
@@ -52,7 +55,7 @@
       "-np",
       "1",
       "--port",
-      "49937",
+      "58297",
       "--host",
       "127.0.0.1",
       "--alias",
@@ -71,7 +74,7 @@
   "source": {
     "buildMode": "nix-release",
     "dirty": true,
-    "revision": "c0abb9f6779908b96a4831b58a0e41ea93566d92"
+    "revision": "1589ed791a843ff05685c74a37b3c2bdb4cf5c1b"
   },
   "table": "memory-q4",
   "target": "reference"

@@ -1,0 +1,75 @@
+{
+  "artifactType": "model-bench-table",
+  "fingerprint": {
+    "canonical": {
+      "cppStandard": "C++20",
+      "cpuArchitecture": "x86_64",
+      "cpuLogicalCores": 32,
+      "cpuModel": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+      "cpuPhysicalCores": 16,
+      "cxxCompiler": "GCC 15.3.0",
+      "gpuArchitecture": "gfx1151",
+      "gpuComputeUnits": 20,
+      "gpuDriver": "amdgpu",
+      "gpuName": "AMD Radeon 8060S Graphics",
+      "gpuPciId": "1002:1586",
+      "kernelRelease": "7.1.8",
+      "memoryTotalBytes": 134309879808,
+      "memoryType": "LPDDR5X (Unified)",
+      "rocmVersion": "7.2.3",
+      "schemaVersion": "1.0.0"
+    },
+    "fingerprintId": "34bee0c70b5847b76a43f2c6da016bafed74530bff113cc4ffc5f43f21fe2f96",
+    "schemaVersion": "1.0.0"
+  },
+  "measuredOn": "2026-09-21",
+  "mode": null,
+  "model": {
+    "id": "Qwen3.8-27B",
+    "variant": "q8"
+  },
+  "notes": [
+    "peak device-wide VRAM + GTT use sampled with rocm-smi every 250 ms during the request",
+    "server mode: ar"
+  ],
+  "referenceName": "llama.cpp",
+  "rows": {
+    "16K prefix, pp4096 + tg128": {
+      "command": "gufo serve --port 42115 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 262144 --served-model-name bench --think off --max-pending-per-client 8",
+      "gib": 21.26
+    },
+    "pp2048 + tg128": {
+      "command": "gufo serve --port 42115 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 262144 --served-model-name bench --think off --max-pending-per-client 8",
+      "gib": 19.37
+    }
+  },
+  "schemaVersion": 1,
+  "server": {
+    "command": [
+      "gufo",
+      "serve",
+      "--port",
+      "42115",
+      "--sessions",
+      "1",
+      "llm",
+      "--model",
+      "Qwen3.8-27B-UD-Q8_K_L.gguf",
+      "--context",
+      "262144",
+      "--served-model-name",
+      "bench",
+      "--think",
+      "off",
+      "--max-pending-per-client",
+      "8"
+    ]
+  },
+  "source": {
+    "buildMode": "nix-release",
+    "dirty": true,
+    "revision": "1589ed791a843ff05685c74a37b3c2bdb4cf5c1b"
+  },
+  "table": "memory-q8",
+  "target": "gufo"
+}

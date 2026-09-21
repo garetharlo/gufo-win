@@ -29,13 +29,14 @@
     "variant": "q4"
   },
   "notes": [
-    "llama.cpp: version: 10273 (a6aa6f5)",
+    "llama.cpp: version: 0.4.1-dev (build 11069, commit )",
     "pp2048/tg128; depth is a cached prefix of synthetic text; tolerance max(32, 0.500%) on cache_n and prompt_n; actual counts per sample in rows",
     "synthetic text: 1.167 tokens/word, template overhead 12 tokens"
   ],
   "referenceName": "llama.cpp",
   "rows": {
     "0": {
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 35456 -np 1 --port 55429 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
       "counts": [
         {
           "cache_n": 0,
@@ -43,13 +44,14 @@
           "prompt_n": 2033
         }
       ],
-      "pp": 343.18,
+      "pp": 326.21,
       "pp_sd": null,
       "samples": 1,
-      "tg": 12.06,
+      "tg": 12.09,
       "tg_sd": null
     },
     "12288": {
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 35456 -np 1 --port 55429 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
       "counts": [
         {
           "cache_n": 12275,
@@ -57,13 +59,14 @@
           "prompt_n": 2055
         }
       ],
-      "pp": 263.88,
+      "pp": 275.09,
       "pp_sd": null,
       "samples": 1,
-      "tg": 11.58,
+      "tg": 11.61,
       "tg_sd": null
     },
     "16384": {
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 35456 -np 1 --port 55429 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
       "counts": [
         {
           "cache_n": 16373,
@@ -71,13 +74,14 @@
           "prompt_n": 2050
         }
       ],
-      "pp": 248.5,
+      "pp": 264.36,
       "pp_sd": null,
       "samples": 1,
-      "tg": 11.44,
+      "tg": 11.45,
       "tg_sd": null
     },
     "32768": {
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 35456 -np 1 --port 55429 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
       "counts": [
         {
           "cache_n": 32778,
@@ -85,13 +89,14 @@
           "prompt_n": 2056
         }
       ],
-      "pp": 195.39,
+      "pp": 228.96,
       "pp_sd": null,
       "samples": 1,
-      "tg": 10.89,
+      "tg": 10.91,
       "tg_sd": null
     },
     "4096": {
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 35456 -np 1 --port 55429 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
       "counts": [
         {
           "cache_n": 4094,
@@ -99,13 +104,14 @@
           "prompt_n": 2037
         }
       ],
-      "pp": 310.23,
+      "pp": 302.46,
       "pp_sd": null,
       "samples": 1,
-      "tg": 11.89,
+      "tg": 11.92,
       "tg_sd": null
     },
     "8192": {
+      "command": "llama-server -m Qwen3.8-27B-UD-Q4_K_XL.gguf -c 35456 -np 1 --port 55429 --host 127.0.0.1 --alias bench -ngl 999 -fa on --cache-reuse 0 --jinja --reasoning off",
       "counts": [
         {
           "cache_n": 8199,
@@ -113,10 +119,10 @@
           "prompt_n": 2043
         }
       ],
-      "pp": 284.36,
+      "pp": 287.14,
       "pp_sd": null,
       "samples": 1,
-      "tg": 11.74,
+      "tg": 11.77,
       "tg_sd": null
     }
   },
@@ -127,11 +133,11 @@
       "-m",
       "Qwen3.8-27B-UD-Q4_K_XL.gguf",
       "-c",
-      "36864",
+      "35456",
       "-np",
       "1",
       "--port",
-      "60011",
+      "55429",
       "--host",
       "127.0.0.1",
       "--alias",
@@ -150,7 +156,7 @@
   "source": {
     "buildMode": "nix-release",
     "dirty": true,
-    "revision": "c0abb9f6779908b96a4831b58a0e41ea93566d92"
+    "revision": "1589ed791a843ff05685c74a37b3c2bdb4cf5c1b"
   },
   "table": "single-ar-q4",
   "target": "reference"

@@ -1,0 +1,157 @@
+{
+  "artifactType": "model-bench-table",
+  "fingerprint": {
+    "canonical": {
+      "cppStandard": "C++20",
+      "cpuArchitecture": "x86_64",
+      "cpuLogicalCores": 32,
+      "cpuModel": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+      "cpuPhysicalCores": 16,
+      "cxxCompiler": "GCC 15.3.0",
+      "gpuArchitecture": "gfx1151",
+      "gpuComputeUnits": 20,
+      "gpuDriver": "amdgpu",
+      "gpuName": "AMD Radeon 8060S Graphics",
+      "gpuPciId": "1002:1586",
+      "kernelRelease": "7.1.8",
+      "memoryTotalBytes": 134309879808,
+      "memoryType": "LPDDR5X (Unified)",
+      "rocmVersion": "7.2.3",
+      "schemaVersion": "1.0.0"
+    },
+    "fingerprintId": "34bee0c70b5847b76a43f2c6da016bafed74530bff113cc4ffc5f43f21fe2f96",
+    "schemaVersion": "1.0.0"
+  },
+  "measuredOn": "2026-09-21",
+  "mode": null,
+  "model": {
+    "id": "Qwen3.8-27B",
+    "variant": "q8"
+  },
+  "notes": [
+    "pp2048/tg128; depth is a cached prefix of synthetic text; tolerance max(32, 0.500%) on cache_n and prompt_n; actual counts per sample in rows",
+    "synthetic text: 1.167 tokens/word, template overhead 12 tokens"
+  ],
+  "referenceName": "llama.cpp",
+  "rows": {
+    "0": {
+      "command": "gufo serve --port 33579 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 35456 --served-model-name bench --think off --max-pending-per-client 8",
+      "counts": [
+        {
+          "cache_n": 0,
+          "predicted_n": 128,
+          "prompt_n": 2033
+        }
+      ],
+      "pp": 679.77,
+      "pp_sd": null,
+      "samples": 1,
+      "tg": 6.62,
+      "tg_sd": null
+    },
+    "12288": {
+      "command": "gufo serve --port 33579 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 35456 --served-model-name bench --think off --max-pending-per-client 8",
+      "counts": [
+        {
+          "cache_n": 12276,
+          "predicted_n": 128,
+          "prompt_n": 2054
+        }
+      ],
+      "pp": 533.89,
+      "pp_sd": null,
+      "samples": 1,
+      "tg": 7.27,
+      "tg_sd": null
+    },
+    "16384": {
+      "command": "gufo serve --port 33579 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 35456 --served-model-name bench --think off --max-pending-per-client 8",
+      "counts": [
+        {
+          "cache_n": 16374,
+          "predicted_n": 128,
+          "prompt_n": 2049
+        }
+      ],
+      "pp": 507.32,
+      "pp_sd": null,
+      "samples": 1,
+      "tg": 7.19,
+      "tg_sd": null
+    },
+    "32768": {
+      "command": "gufo serve --port 33579 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 35456 --served-model-name bench --think off --max-pending-per-client 8",
+      "counts": [
+        {
+          "cache_n": 32779,
+          "predicted_n": 128,
+          "prompt_n": 2055
+        }
+      ],
+      "pp": 442.06,
+      "pp_sd": null,
+      "samples": 1,
+      "tg": 6.9,
+      "tg_sd": null
+    },
+    "4096": {
+      "command": "gufo serve --port 33579 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 35456 --served-model-name bench --think off --max-pending-per-client 8",
+      "counts": [
+        {
+          "cache_n": 4095,
+          "predicted_n": 128,
+          "prompt_n": 2036
+        }
+      ],
+      "pp": 632.28,
+      "pp_sd": null,
+      "samples": 1,
+      "tg": 7.42,
+      "tg_sd": null
+    },
+    "8192": {
+      "command": "gufo serve --port 33579 --sessions 1 llm --model Qwen3.8-27B-UD-Q8_K_L.gguf --context 35456 --served-model-name bench --think off --max-pending-per-client 8",
+      "counts": [
+        {
+          "cache_n": 8200,
+          "predicted_n": 128,
+          "prompt_n": 2042
+        }
+      ],
+      "pp": 606.46,
+      "pp_sd": null,
+      "samples": 1,
+      "tg": 7.34,
+      "tg_sd": null
+    }
+  },
+  "schemaVersion": 1,
+  "server": {
+    "command": [
+      "gufo",
+      "serve",
+      "--port",
+      "33579",
+      "--sessions",
+      "1",
+      "llm",
+      "--model",
+      "Qwen3.8-27B-UD-Q8_K_L.gguf",
+      "--context",
+      "35456",
+      "--served-model-name",
+      "bench",
+      "--think",
+      "off",
+      "--max-pending-per-client",
+      "8"
+    ]
+  },
+  "source": {
+    "buildMode": "nix-release",
+    "dirty": true,
+    "revision": "1589ed791a843ff05685c74a37b3c2bdb4cf5c1b"
+  },
+  "table": "single-ar-q8",
+  "target": "gufo"
+}
