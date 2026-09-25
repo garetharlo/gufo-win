@@ -427,7 +427,12 @@ and template-aware message counting are not implemented.
 - `seed`
 - `stream`
 - `stream_options.include_usage`
-- `tools` and `tool_choice` when supported
+- `tools` and `tool_choice` when supported. Function tools accept the nested
+  Chat Completions shape and the flat Responses-style `{type,name,parameters}`
+  shape. Missing or null `parameters` become `{}`. `parametersJsonSchema` is
+  accepted as an alias for `parameters`. Flat definitions retain all function
+  fields, including `strict`. Unsupported tool types, malformed entries and
+  non-object parameters return 400 `invalid_tools` before generation.
 - shared top-k, min-p, repeat, frequency and presence sampling controls
 
 Streaming objects use `chat.completion.chunk` and end with the compatibility

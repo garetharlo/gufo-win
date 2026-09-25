@@ -308,26 +308,58 @@ bool ParseTools(const json::Value* tools,
     return false;
   }
   for (const auto& item : tools->items()) {
-    if (!item.is_object() || item.member_str("type") != "function") {
+    if (!item.is_object()) {
+      *error = "'tools' entries must be objects";
+      return false;
+    }
+    if (item.member_str("type") != "function") {
       *error = "only function tools are supported";
       return false;
     }
+
     const json::Value* function = item.find("function");
-    if (function == nullptr || !function->is_object()) {
-      *error = "function tools require a function object";
+    if (function != nullptr && !function->is_object()) {
+      *error = "'function' must be an object";
       return false;
     }
+    const json::Value* src = function != nullptr ? function : &item;
+    // OpenAI uses "parameters"; some agent clients send parametersJsonSchema.
+    const json::Value* params_src = src->find("parameters");
+    if (params_src == nullptr || params_src->is_null()) {
+      params_src = src->find("parametersJsonSchema");
+    }
+
     tokenization::ChatTool tool;
-    tool.name = function->member_str("name");
-    tool.description = function->member_str("description");
-    const json::Value* parameters = function->find("parameters");
-    if (tool.name.empty() || parameters == nullptr ||
-        !parameters->is_object()) {
-      *error = "function tools require a name and object parameters schema";
+    tool.name = src->member_str("name");
+    tool.description = src->member_str("description");
+    if (tool.name.empty()) {
+      *error = "function tools require a nonempty name";
       return false;
     }
-    tool.parameters_json = parameters->dump();
-    tool.definition_json = item.dump();
+    if (params_src != nullptr && !params_src->is_null() &&
+        !params_src->is_object()) {
+      *error = "function tools require an object parameters schema";
+      return false;
+    }
+    // Preserve nested definitions and their field order. For flat tools, move
+    // the complete function body (including strict) under "function".
+    json::Value function_obj = json::Value::object();
+    for (const auto& [key, value] : src->members()) {
+      if (key == "parametersJsonSchema" ||
+          (function == nullptr && key == "type")) {
+        continue;
+      }
+      function_obj.append_member(key, value);
+    }
+    function_obj["parameters"] =
+        params_src != nullptr && params_src->is_object()
+            ? *params_src
+            : json::Value::object();
+    tool.parameters_json = function_obj.find("parameters")->dump();
+    json::Value definition = function != nullptr ? item : json::Value::object();
+    definition["type"] = "function";
+    definition["function"] = std::move(function_obj);
+    tool.definition_json = definition.dump();
     output->push_back(std::move(tool));
   }
   return true;
