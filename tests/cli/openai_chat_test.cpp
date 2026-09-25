@@ -465,6 +465,117 @@ void TestToolCallsAreStructured() {
          "Required tool choice reaches the model backend");
 }
 
+void TestToolParameterCompatibility() {
+  using gufo::json::Value;
+  const std::pair<const char*, const char*> cases[] = {
+      {R"({"name":"f"})", "{}"},
+      {R"({"name":"f","parameters":null})", "{}"},
+      {R"({"name":"f","parameters":{}})", "{}"},
+      {R"({"name":"f","parametersJsonSchema":null})", "{}"},
+      {R"({"name":"f","parametersJsonSchema":{"type":"object"}})",
+       R"({"type":"object"})"},
+      {R"({"name":"f","parameters":null,"parametersJsonSchema":{"type":"object"}})",
+       R"({"type":"object"})"},
+      {R"({"name":"f","parameters":{},"parametersJsonSchema":"ignored"})",
+       "{}"},
+  };
+  for (bool flat : {false, true}) {
+    for (bool stream : {false, true}) {
+      for (const auto& [function_json, expected_parameters] : cases) {
+        FakeBackend backend;
+        backend.pieces = {
+            "<tool_call>\n<function=f>\n</function>\n</tool_call>"};
+        auto body = gufo::json::parse(R"({
+          "model":"test-model","messages":[{"role":"user","content":"call f"}],
+          "tool_choice":"required","tools":[]
+        })");
+        auto definition = Value::object();
+        definition["type"] = "function";
+        auto function = gufo::json::parse(function_json);
+        if (flat) {
+          for (const auto& [key, value] : function.members())
+            definition.append_member(key, value);
+        } else {
+          definition["function"] = function;
+        }
+        body["tools"].push_back(std::move(definition));
+        body["stream"] = stream;
+        const auto response =
+            gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+        Expect(response.status == 200, "Compatible tool schema is accepted");
+        std::string output = response.body;
+        if (stream) {
+          Expect(static_cast<bool>(response.streaming_body),
+                 "Compatible tool request supports streaming");
+          response.streaming_body([&](std::string_view chunk) {
+            output += chunk;
+            return true;
+          });
+        }
+        Expect(output.find(R"("name":"f")") != std::string::npos &&
+                   output.find(R"("finish_reason":"tool_calls")") !=
+                       std::string::npos,
+               "No-argument function returns a structured tool call");
+        Expect(backend.last_request.tools.size() == 1,
+               "Normalized tool reaches the backend");
+        const auto& tool = backend.last_request.tools.front();
+        Expect(tool.parameters_json == expected_parameters,
+               "Missing/null schemas normalize and parameters take precedence");
+        auto expected_function = Value::object();
+        expected_function["name"] = "f";
+        expected_function["parameters"] =
+            gufo::json::parse(expected_parameters);
+        auto expected_definition = Value::object();
+        expected_definition["type"] = "function";
+        expected_definition["function"] = expected_function;
+        Expect(tool.definition_json == expected_definition.dump(),
+               "Templates receive the normalized nested definition");
+      }
+    }
+  }
+}
+
+void TestInvalidToolsFailBeforeGeneration() {
+  const char* invalid[] = {
+      "null",
+      "42",
+      R"({"function":{"name":"f"}})",
+      R"({"type":42,"function":{"name":"f"}})",
+      R"({"type":"custom","custom":{"name":"shell"}})",
+      R"({"type":"function","function":null,"name":"f"})",
+      R"({"type":"function","function":[],"name":"f"})",
+      R"({"type":"function","function":{}})",
+      R"({"type":"function","name":""})",
+      R"({"type":"function","name":42})",
+      R"({"type":"function","name":"f","parameters":"bad"})",
+      R"({"type":"function","name":"f","parameters":[]})",
+      R"({"type":"function","name":"f","parameters":false})",
+      R"({"type":"function","name":"f","parametersJsonSchema":[]})",
+  };
+  for (bool stream : {false, true}) {
+    for (bool valid_first : {false, true}) {
+      for (const char* entry : invalid) {
+        FakeBackend backend;
+        auto body = gufo::json::parse(R"({
+          "model":"test-model","messages":[{"role":"user","content":"use tools"}],
+          "tools":[]
+        })");
+        if (valid_first)
+          body["tools"].push_back(gufo::json::parse(
+              R"({"type":"function","function":{"name":"valid","parameters":{}}})"));
+        body["tools"].push_back(gufo::json::parse(entry));
+        body["stream"] = stream;
+        const auto response =
+            gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+        Expect(response.status == 400 &&
+                   response.body.find("invalid_tools") != std::string::npos &&
+                   !response.streaming_body && backend.chat_calls == 0,
+               "Invalid tools fail before generation, including mixed lists");
+      }
+    }
+  }
+}
+
 void TestQwenToolBoundariesAndSchema() {
   using gufo::json::Value;
   const auto schema = gufo::json::parse(R"({
@@ -698,8 +809,9 @@ void TestCompleteToolDefinitionsReachTemplate() {
   const auto response = gufo::server::HandleOpenAiChat(Request(R"({
     "model":"test-model",
     "messages":[{"role":"user","content":"Emit a value."}],
-    "tools":[{"type":"function","function":{"name":"emit","strict":true,
-      "parameters":{"type":"object","additionalProperties":false}},
+    "tools":[{"type":"function","function":{"parameters":{
+      "type":"object","additionalProperties":false},"strict":true,
+      "description":"","name":"emit"},
       "vendor":{"version":2}}]
   })"),
                                                        backend);
@@ -708,19 +820,62 @@ void TestCompleteToolDefinitionsReachTemplate() {
   const auto& tool = backend.last_request.tools.front();
   Expect(
       tool.definition_json ==
-          R"({"type":"function","function":{"name":"emit","strict":true,"parameters":{"type":"object","additionalProperties":false}},"vendor":{"version":2}})",
-      "tool fields, omitted description and original field order survive");
+          R"({"type":"function","function":{"parameters":{"type":"object","additionalProperties":false},"strict":true,"description":"","name":"emit"},"vendor":{"version":2}})",
+      "Valid nested definitions retain every field and its original order");
   gufo::tokenization::ChatTemplateOptions options;
   options.enable_thinking = false;
   const auto rendered = gufo::tokenization::QwenChatTemplate::Render(
       backend.last_request.messages, backend.last_request.tools, options);
   Expect(
-      rendered &&
+      rendered.has_value() &&
           rendered->find(
-              "<tools>\n"
-              R"({"type": "function", "function": {"name": "emit", "strict": true, "parameters": {"type": "object", "additionalProperties": false}}, "vendor": {"version": 2}})"
-              "\n</tools>") != std::string::npos,
-      "template serializes the complete original tool object");
+              R"({"type": "function", "function": {"parameters": {"type": "object", "additionalProperties": false}, "strict": true, "description": "", "name": "emit"}, "vendor": {"version": 2}})") !=
+              std::string::npos,
+      "Existing valid tool JSON is unchanged in the Qwen prompt");
+}
+
+void TestFlatToolFieldsReachTemplate() {
+  for (const char* strict : {"true", "false", "null"}) {
+    FakeBackend backend;
+    auto body = gufo::json::parse(R"({
+      "model":"test-model","messages":[{"role":"user","content":"use f"}],
+      "tools":[]
+    })");
+    auto function = gufo::json::parse(R"({
+      "name":"f","description":"","parameters":{"type":"object"},
+      "strict":null,"vendor":{"version":2}
+    })");
+    function["strict"] = gufo::json::parse(strict);
+    auto flat = function;
+    flat["type"] = "function";
+    body["tools"].push_back(flat);
+    const auto response =
+        gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+    Expect(response.status == 200 && backend.last_request.tools.size() == 1,
+           "Flat function with additional fields is accepted");
+    const auto flat_tools = backend.last_request.tools;
+    const auto definition = gufo::json::parse(flat_tools[0].definition_json);
+    const auto* nested = definition.find("function");
+    Expect(nested && nested->dump() == function.dump() &&
+               !definition.contains("strict") && !definition.contains("vendor"),
+           "All flat function fields survive DS4's nested function extraction");
+    gufo::tokenization::ChatTemplateOptions options;
+    options.enable_thinking = false;
+    const auto flat_prompt = gufo::tokenization::QwenChatTemplate::Render(
+        backend.last_request.messages, flat_tools, options);
+    auto canonical = gufo::json::Value::object();
+    canonical["type"] = "function";
+    canonical["function"] = function;
+    body["tools"] = gufo::json::Value::array();
+    body["tools"].push_back(canonical);
+    const auto nested_response =
+        gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+    Expect(nested_response.status == 200, "Nested equivalent is accepted");
+    const auto nested_prompt = gufo::tokenization::QwenChatTemplate::Render(
+        backend.last_request.messages, backend.last_request.tools, options);
+    Expect(flat_prompt.has_value() && nested_prompt == flat_prompt,
+           "Flat and nested tools produce identical Qwen prompts");
+  }
 }
 
 void TestAllSamplingControlsReachBackend() {
@@ -1070,6 +1225,7 @@ int main() {
   TestCachedPrefillMetrics();
   TestBackendSamplingDefaults();
   TestCompleteToolDefinitionsReachTemplate();
+  TestFlatToolFieldsReachTemplate();
   TestAllSamplingControlsReachBackend();
   TestUnsupportedSamplingControlsAreRejected();
   TestAssistantReasoningContentReachesBackend();
@@ -1078,6 +1234,8 @@ int main() {
   TestStreamingPromptOpenedReasoning();
   TestConflictingReasoningControlsAreRejected();
   TestToolCallsAreStructured();
+  TestToolParameterCompatibility();
+  TestInvalidToolsFailBeforeGeneration();
   TestQwenToolBoundariesAndSchema();
   TestDeepSeekToolCallsAreStructured();
   TestWrongModelIsRejected();
