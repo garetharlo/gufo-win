@@ -437,7 +437,7 @@ overlap, so the constant stays at 2048. The rest of #470 only pays with the
 Acceptance: logits independent of chunk size; long prompts faster; short
 prompts and decode not slower.
 
-### [ ] #571 — faster wide prefill kernels
+### [~] #571 — faster wide prefill kernels
 
 Upstream: `a33e989`. pp2048 **1826 → 1853 tok/s**; HTTP AR pp d0
 **1708 → 1774**, d32K **1536 → 1649**; pp2051 **1795 → 1815**; byte-identical
@@ -447,6 +447,19 @@ Changes: gate/up fused rows, shared K16 fragments, register-resident Q8_0 SSM
 fragments, deferred residual in MoE combine, 128×128 router/GDN tiles,
 128-token gate/up and 64-token down tiles, tail kernel for up to 16 tokens past
 a tile, software-pipelined attention, GDN q/k in registers.
+
+- [x] **128×128 router/GDN tiles** (`d61b82a`): `UnquantizedF16Gemm` gains a
+  `batch >= 1024` branch launching `DenseF16GEMMKernel<128,128,...>`; the
+  64×64 path is unchanged for narrow batches. Exact: greedy haiku and
+  `--validate-prefill 64` (rmse 0.42, cosine 0.99, max 2.10) both identical
+  to `5629bc7`. Measured: pp2048 d0 1667.03±6.03 (neutral), d32K
+  1523.20±5.28 (+0.3% over 1518.53), tg neutral.
+- [ ] gate/up fused rows (paired shared-expert W8A8 rejected upstream).
+- [ ] shared K16 fragments.
+- [ ] register-resident Q8_0 SSM fragments.
+- [ ] deferred residual in MoE combine (`HcCombineF16` defer_w/inject_out).
+- [ ] 128-token gate/up and 64-token down tiles + tail kernel.
+- [ ] software-pipelined attention, GDN q/k in registers.
 
 Windows fit: pure HIP, but large kernel rewrite against a diverged fork. Do
 last; port one kernel family at a time.
