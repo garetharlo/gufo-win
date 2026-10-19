@@ -424,6 +424,8 @@ pp2048 d0 1667.06±6.79 (neutral), d32K 1522.05±4.81 (neutral), d128K
 **1414.03±24.54 vs 1391.00** (+1.7%), tg16 neutral at all depths. Greedy
 haiku identical ("Time writes in the wet."). Rollback: revert `0857383`.
 
+### [ ] #470 - 4096-token prefill chunks + overlapped n-gram gather
+
 
 
 Upstream: `47b6391`. **6–11% faster for 24K–102K prompts**, prompts under 8K
