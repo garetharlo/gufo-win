@@ -31,6 +31,30 @@ __device__ __forceinline__ float Bf16ToF32(std::uint16_t h) {
   return __uint_as_float(static_cast<std::uint32_t>(h) << 16);
 }
 
+/// Lane i receives lane (i ^ offset)'s value, as __shfl_xor(v, offset) does
+/// across a wave32. On gfx1151 it is a DPP row_xmask (offsets below 16) or
+/// v_permlanex16 (16): a register move instead of an LDS crossbar round trip
+/// (ds_bpermute). Only the transport differs, so reductions stay bitwise;
+/// every lane must be active, as the shuffle's callers already require.
+__device__ __forceinline__ int XorLane(int v, int offset) {
+#if defined(__gfx1151__)
+  switch (offset) {
+    case 1:
+      return __builtin_amdgcn_update_dpp(0, v, 0x161, 0xF, 0xF, false);
+    case 2:
+      return __builtin_amdgcn_update_dpp(0, v, 0x162, 0xF, 0xF, false);
+    case 4:
+      return __builtin_amdgcn_update_dpp(0, v, 0x164, 0xF, 0xF, false);
+    case 8:
+      return __builtin_amdgcn_update_dpp(0, v, 0x168, 0xF, 0xF, false);
+    case 16:
+      return __builtin_amdgcn_permlanex16(v, v, 0x76543210, 0xfedcba98, false,
+                                          false);
+  }
+#endif
+  return __shfl_xor(v, offset);
+}
+
 /// Reads element i of a Q8_0 / F32 / BF16 / F16 row.
 __device__ __forceinline__ float RowElement(const void* row, WeightType type,
                                             std::uint32_t i) {
@@ -5126,21 +5150,40 @@ __global__ void SsmConvBoundaryKernel(const float* qkv, const float* w,
                                       std::uint32_t n_tokens,
                                       std::uint32_t channels,
                                       std::uint32_t stride) {
-  const std::uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
-  const std::uint32_t t = blockIdx.y * kSsmProjectionTileTokens + blockIdx.z;
-  if (c >= channels || t >= n_tokens) {
+  const std::uint32_t c = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
+  const std::uint32_t t0 = blockIdx.y * kSsmProjectionTileTokens;
+  if (c >= channels) {
     return;
   }
-  const float4 taps = *reinterpret_cast<const float4*>(w + c * 4);
-  float v[4];
+  float4 taps[4];
 #pragma unroll
-  for (int j = 0; j < 4; ++j) {
-    const int src = static_cast<int>(t) - 3 + j;
-    v[j] = src < 0 ? history[static_cast<std::size_t>(src + 3) * channels + c]
-                   : qkv[static_cast<std::size_t>(src) * stride + c];
+  for (int j = 0; j < 4; ++j)
+    taps[j] = *reinterpret_cast<const float4*>(w + (c + j) * 4);
+  // Input rows t0 - 3 .. t0 + 2.
+  float4 v[6];
+#pragma unroll
+  for (int j = 0; j < 6; ++j) {
+    const int src = static_cast<int>(t0) - 3 + j;
+    v[j] = float4{0.0F, 0.0F, 0.0F, 0.0F};
+    if (src < 0)
+      v[j] = *reinterpret_cast<const float4*>(
+          history + static_cast<std::size_t>(src + 3) * channels + c);
+    else if (src < static_cast<int>(n_tokens))
+      v[j] = *reinterpret_cast<const float4*>(
+          qkv + static_cast<std::size_t>(src) * stride + c);
   }
-  out[static_cast<std::size_t>(t) * channels + c] =
-      SsmConv4Value(taps, v[0], v[1], v[2], v[3]);
+#pragma unroll
+  for (int z = 0; z < 3; ++z) {
+    const std::uint32_t t = t0 + z;
+    if (t >= n_tokens)
+      break;
+    *reinterpret_cast<float4*>(out + static_cast<std::size_t>(t) * channels +
+                               c) = float4{
+        SsmConv4Value(taps[0], v[z].x, v[z + 1].x, v[z + 2].x, v[z + 3].x),
+        SsmConv4Value(taps[1], v[z].y, v[z + 1].y, v[z + 2].y, v[z + 3].y),
+        SsmConv4Value(taps[2], v[z].z, v[z + 1].z, v[z + 2].z, v[z + 3].z),
+        SsmConv4Value(taps[3], v[z].w, v[z + 1].w, v[z + 2].w, v[z + 3].w)};
+  }
 }
 
 // Optional output layout for the stacked QKV projection. The projection's
@@ -5180,6 +5223,9 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
   // 16-bit weight rows staged as they are: F16, or BF16 with BF16
   // activations.
   constexpr bool kRawWeights = kHalfWeights || kBf16;
+  constexpr bool kRegisterWeights = kSsmConv;
+  static_assert(!kRegisterWeights ||
+                (BM == 256 && BK == 2 && WM == 8 && WN == 1));
   constexpr int kRowTiles = BM / 16;
   constexpr int kTokTiles = BN / 16;
   constexpr int kWaveRowTiles = kRowTiles / WM;
@@ -5194,14 +5240,16 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
   // One K block of one row or token is four 16-byte chunks; the chunks of
   // nearby rows are permuted so a fragment read (one row per lane, 64-byte
   // stride) covers all bank groups.
-  constexpr int kLdsChunks = BK * (BM + BN) * 4;
-  static_assert(kLdsChunks * 16 >= 8 * 512 * 4, "epilogue transposes 16 KB");
-  constexpr int kTransposeChunks = 8 * 16 * 36 * sizeof(float) / sizeof(uint4);
+  constexpr int kLdsChunks = BK * ((kRegisterWeights ? 0 : BM) + BN) * 4;
+  constexpr int kTransposeChunks = 8 *
+                                   (kSsmConv ? kSsmProjectionTileTokens : 16) *
+                                   36 * sizeof(float) / sizeof(uint4);
   constexpr int kLdsStorage =
       kLdsChunks < kTransposeChunks ? kTransposeChunks : kLdsChunks;
   __shared__ __attribute__((aligned(16))) uint4 s_lds[kLdsStorage];
   auto* s_a = reinterpret_cast<uint4(*)[BM][4]>(s_lds);
-  auto* s_b = reinterpret_cast<uint4(*)[BN][4]>(s_lds + (BK * BM * 4));
+  auto* s_b = reinterpret_cast<uint4(*)[BN][4]>(
+      s_lds + (kRegisterWeights ? 0 : BK * BM * 4));
   const auto swizzle = [](int row, int c) { return c ^ ((row >> 1) & 3); };
 
   const int num_kb = static_cast<int>(k / 32);
@@ -5241,15 +5289,15 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
     return r >= num_kb ? r - num_kb : r;
   };
 
-  // Weight fetch unit p of a thread: row (p * 256 + tid) / BK, K block
-  // (p * 256 + tid) % BK of the stage; rows past m read the last row with
-  // a zero scale.
+  // SSM thread tid owns row tid and K block p of the stage. Other paths
+  // use row (p*256+tid)/BK and K block (p*256+tid)%BK; rows past m read
+  // the last row with a zero scale.
   const std::uint8_t* a_ptr[kAPer];
   bool a_live[kAPer];
 #pragma unroll
   for (int p = 0; p < kAPer; ++p) {
     const int idx = (p * 256) + tid;
-    const int r = r_block + (idx / BK);
+    const int r = r_block + (kRegisterWeights ? tid : idx / BK);
     a_live[p] = idx < kAUnits && r < m_i;
     // Interleave the four gate streams within the tile, without repacking
     // weights. Each group of four rows produces one mixed hidden element.
@@ -5275,7 +5323,7 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
   const auto fetch_stage = [&](int kb0) {
 #pragma unroll
     for (int p = 0; p < kAPer; ++p) {
-      const int kb = kb0 + (((p * 256) + tid) % BK);
+      const int kb = kb0 + (kRegisterWeights ? p : (((p * 256) + tid) % BK));
       const bool live = a_live[p] && kb < num_kb;
       if constexpr (kRawWeights) {
         const auto* src = reinterpret_cast<const uint4*>(
@@ -5313,6 +5361,10 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
 
   const __half2 magic = __floats2half2_rn(-1152.0F, -1152.0F);
   const __half2 zero2 = __floats2half2_rn(0.0F, 0.0F);
+  // Preserve this stage's rounded fragments before prefetch overwrites
+  // the raw Q8 codes. Each SSM wave owns both of its 16-row output tiles.
+  v16h own_a_lo[BK];
+  v16h own_a_hi[BK];
   const auto commit_stage = [&]() {
 #pragma unroll
     for (int p = 0; p < kAPer; ++p) {
@@ -5340,11 +5392,16 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
           CodesToHalves(words[i] ^ 0x80808080U, magic, scale2, zero2, h[2 * i],
                         h[2 * i + 1]);
         }
+        if constexpr (kRegisterWeights) {
+          __builtin_memcpy(&own_a_lo[p], &h[0], 32);
+          __builtin_memcpy(&own_a_hi[p], &h[8], 32);
+        } else {
 #pragma unroll
-        for (int c = 0; c < 4; ++c) {
-          uint4 v;
-          __builtin_memcpy(&v, &h[4 * c], 16);
-          s_a[kk][row][swizzle(row, c)] = v;
+          for (int c = 0; c < 4; ++c) {
+            uint4 v;
+            __builtin_memcpy(&v, &h[4 * c], 16);
+            s_a[kk][row][swizzle(row, c)] = v;
+          }
         }
       }
     }
@@ -5391,16 +5448,34 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
     for (int kb = 0; kb < BK; ++kb) {
       v16h a_lo[kWaveRowTiles];
       v16h a_hi[kWaveRowTiles];
+      if constexpr (kRegisterWeights) {
+        using v8u = __attribute__((__vector_size__(32))) std::uint32_t;
+        const v8u own_lo = __builtin_bit_cast(v8u, own_a_lo[kb]);
+        const v8u own_hi = __builtin_bit_cast(v8u, own_a_hi[kb]);
+        v8u peer_lo;
+        v8u peer_hi;
 #pragma unroll
-      for (int i = 0; i < kWaveRowTiles; ++i) {
-        const int row = (((wave_row * kWaveRowTiles) + i) * 16) + sub_lane;
-        uint4 c[4];
-#pragma unroll
-        for (int q = 0; q < 4; ++q) {
-          c[q] = s_a[kb][row][swizzle(row, q)];
+        for (int q = 0; q < 8; ++q) {
+          peer_lo[q] = XorLane(own_lo[q], 16);
+          peer_hi[q] = XorLane(own_hi[q], 16);
         }
-        __builtin_memcpy(&a_lo[i], &c[0], 32);
-        __builtin_memcpy(&a_hi[i], &c[2], 32);
+#pragma unroll
+        for (int i = 0; i < kWaveRowTiles; ++i) {
+          a_lo[i] = __builtin_bit_cast(v16h, half_id == i ? own_lo : peer_lo);
+          a_hi[i] = __builtin_bit_cast(v16h, half_id == i ? own_hi : peer_hi);
+        }
+      } else {
+#pragma unroll
+        for (int i = 0; i < kWaveRowTiles; ++i) {
+          const int row = (((wave_row * kWaveRowTiles) + i) * 16) + sub_lane;
+          uint4 c[4];
+#pragma unroll
+          for (int q = 0; q < 4; ++q) {
+            c[q] = s_a[kb][row][swizzle(row, q)];
+          }
+          __builtin_memcpy(&a_lo[i], &c[0], 32);
+          __builtin_memcpy(&a_hi[i], &c[2], 32);
+        }
       }
 #pragma unroll
       for (int j = 0; j < kWaveTokTiles; ++j) {
@@ -5888,9 +5963,8 @@ bool DenseF16SsmGemm(const void* w, const __half* x, const float* conv_w,
                      nullptr, conv_w, convolved);
   hipLaunchKernelGGL(
       SsmConvBoundaryKernel,
-      dim3(Blocks(channels),
-           (n_tokens + kSsmProjectionTileTokens - 1) / kSsmProjectionTileTokens,
-           3),
+      dim3(Blocks(channels / 4), (n_tokens + kSsmProjectionTileTokens - 1) /
+                                     kSsmProjectionTileTokens),
       dim3(kThreads), 0, stream, qkvz, conv_w, history, convolved, n_tokens,
       channels, m);
   return true;
