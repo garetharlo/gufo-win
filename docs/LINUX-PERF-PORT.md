@@ -350,6 +350,52 @@ Measured, same session, `gufo bench -p 2048 -n 16 -d 0,32768 -r 3`:
 to the pre-patch binary. Upstream reports the same direction and size (+1.2%
 d0, +1.8% at 128K).
 
+### [~] #485 — accelerate prefill and MTP catch-up
+
+Upstream: `fd747a5`. Upstream matched HTTP increments: pp2048 d0 MTP
+**1581.01 → 1623.99 tok/s**, d32K **1490.59 → 1524.10**, d128K AR
+**1381.32 → 1400.23**, TG within 0.5%, completions and draft counts identical.
+Eight independent slices; the fork has no `GdnCheckpoint`/`PrefillCheckpoint`
+stack, so checkpoint code is dropped from every slice.
+
+- [x] **GDN row reuse** in `GdnRowSplitKernel`: two rows per lane, four waves,
+  128 threads per block, shared `q`/`k` loads reused across the row pair.
+- [ ] Padded SSM F16 rows (`half_stride`, `DenseF16Gemm` `kStrided`).
+- [ ] Full selector scratch (`select_chunk` without `bit_floor`,
+  `first_query = n_tokens - 16` for `last_only`), packed `SelectScore` half2
+  loads and `sched_barrier`.
+- [ ] `RoutedPadBounds` clears padding in-kernel, dropping two
+  `hipMemsetAsync` calls.
+- [ ] `HcMix` `half_only`, skipping the F32 and Q8 copies.
+- [ ] PLE direct mapped n-gram input (`hipHostMallocMapped | Coherent`,
+  `hipHostGetDevicePointer` into `s.ple_emb`, no F32 allocation or uploads).
+- [ ] `DenseBatch` 32-row chunk split for 64+ rows.
+- [ ] MTP catch-up sparse-boundary fix (`hidden_source` +
+  `control_host_->hidden_row`, `Attention` `last`/`dense_rows` flags).
+
+GDN slice measured, same session, `gufo bench -p 2048 -n 16 -d 0,32768 -r 3`:
+
+| cell | baseline `2eb0778`+tier1+#421+#463 | GDN slice | delta |
+| --- | ---: | ---: | ---: |
+| pp2048 d0 | 1629.89 (1637.50 / 1622.28) | **1658.43** | +1.75% |
+| pp2048 d32K | 1491.94 (1497.31 / 1486.57) | **1516.97** | +1.7% |
+| tg16 d0 | 28.46 | 28.42 | neutral |
+| tg16 d32K | 26.17 | 26.32 | neutral |
+
+`--validate-prefill 64` **improves**: rmse 0.30 vs 0.37, cosine 1.00 vs 0.99,
+max error 1.74 vs 2.08.
+
+Not bit-identical, accepted deliberately. The kernel's arithmetic source is
+the single-row kernel's, unchanged (`u += a + b + c + d`), but two rows per
+lane changes register pressure, so clang 23 fast-math reassociates that sum
+differently. Greedy seed 42 diverges at token ~40 of the copper-wire haiku:
+both binaries print the same first two lines, the baseline ends
+`Time wears down the shine.` and the port ends `Time writes in the wet.`
+Rewriting the sum as an explicit `fmaf` chain does not restore identity.
+This is the documented FP reassociation the acceptance criteria allow;
+prefill validation and decode rates are unaffected, and no sampling,
+draft-vocabulary or precision change is involved.
+
 ### [ ] #470 - 4096-token prefill chunks + overlapped n-gram gather
 
 Upstream: `47b6391`. **6–11% faster for 24K–102K prompts**, prompts under 8K
@@ -477,8 +523,9 @@ Working order, as of October 19 2026 (decode is already at upstream parity,
 so prefill and loading lead):
 
 1. ~~`#459` + `#481` + `#482` + `#633 Prepare`~~ done, see Tier 1.
-2. ~~`#421` + `#463`~~ done. `#485` next on top of them — the prefill path this
-   fork is missing, measured at pp2048 depth 0 and 32K.
+2. ~~`#421` + `#463`~~ done. `#485` in progress — GDN row reuse
+   landed (+1.75% pp2048 d0, +1.7% d32K); the remaining seven slices are
+   listed in its section.
 3. `#470` — 2048 vs 4096 chunk sweep on Windows; only then decide.
 4. Loading-time investigation: compare the Windows read/upload path with the
    upstream 16.42 s reference before porting anything.
