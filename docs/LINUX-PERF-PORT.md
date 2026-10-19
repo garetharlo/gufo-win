@@ -272,8 +272,26 @@ Windows port log (in progress):
   `gufo-622-lists`. Interleaved `-p 2048 -n 16 -d 0,32768 -r 2`: tg16 d0
   28.19/28.20 -> 28.22/28.30, tg16 d32K 25.89/26.03 -> 26.15/26.18 (+0.8%),
   pp2048 d0 1745.67/1733.04 -> 1735.43/1729.14 (noise). Kept.
-- [ ] Stage 2: the `kernels.hip.cpp` decode hunks that need no executor
-  wiring (DPP `XorLane` swaps, batched attention loads, vector loads).
+- [x] Stage 2a (`d923796`): the top-of-file decode helpers plus every
+  `__shfl_xor` in `kernels.hip.cpp` (22 sites: `WaveSum`, `BlockSum`,
+  `BlockMax`, the quantize kernels' `max_abs` scans, `GdnKernel`,
+  `GdnEpilogueKernel`, `SelectMarkKernel`, `RouterTopKKernel`, the argmax
+  reduction) switched to the DPP `XorLane` transport, and the now-needed
+  pieces of the same hunk added for stage 3: `Q8_1Block`, `Materialize`,
+  `QuantizeQ8_1Lane` and the `unsigned`/`float` `XorLane` overloads. Only a
+  register move replaces the LDS crossbar round trip; the lane pattern is
+  unchanged, so every reduction is bitwise. Bit-identical: haiku,
+  1,951-token greedy prompt (only the `[Model Load]` line differs) and
+  `--validate-prefill 64` (rmse 0.39, cosine 0.99, max 1.88) all match
+  `gufo-622-lists`. Interleaved `-p 2048 -n 16 -d 0,32768 -r 2` against the
+  stage 1 binary: tg16 d0 28.48/28.47 -> 28.56/28.52 (+0.2%), tg16 d32K
+  26.15/26.08 -> 26.54/26.51 (+1.4%), pp2048 d0 1742.19/1716.73 ->
+  1726.39/1724.55 (noise), pp2048 d32K 1572.79/1565.14 -> 1576.84/1570.90
+  (+0.3%). Kept.
+- [ ] Stage 2b: the remaining `kernels.hip.cpp` rewrites that need no
+  executor wiring (`RmsNormCachedKernel`, the `kStreams`-templated
+  `HcMixEpilogueKernel`, `SmallGemmKernel`, the batched attention loads and
+  the vector-load hunks).
 - [ ] Stage 3: the executor fused Q8_1 producers (`HcCombineQ8_1`,
   `SiluScaleQ8_1`, `SigmoidMulQ8_1`, `ReadyQ8` row reuse, `Q8Input` dense
   overloads) — the bulk of the claim, and the reason the unused stage 1
