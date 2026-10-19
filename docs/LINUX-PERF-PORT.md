@@ -489,15 +489,6 @@ a tile, software-pipelined attention, GDN q/k in registers.
 Windows fit: pure HIP, but large kernel rewrite against a diverged fork. Do
 last; port one kernel family at a time.
 
-### [ ] #626 — cut prefill/decode attention cost at depth
-
-Upstream: `5a1669a`. HTTP AR pp64K **1578 → 1597**, pp128K **1517 → 1544**;
-MTP pp64K **1531 → 1563**, pp128K **1477 → 1503**; deep MTP decode **+1–5%**.
-Also fixes repeated MTP scratch allocation and vision-prepare dispatch stalls.
-
-Windows fit: pure HIP. Large change; take the attention and scratch fixes
-separately.
-
 ### [ ] #622 — compact sparse attention selections once per row
 
 Upstream: `baf5a1b`. **+3.3% at 160K**, server deep decode **+1.4–2.4%**,
