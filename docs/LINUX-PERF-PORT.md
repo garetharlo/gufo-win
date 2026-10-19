@@ -526,7 +526,19 @@ a tile, software-pipelined attention, GDN q/k in registers.
       d32K 1559.60 -> 1576.13, 1571.71 -> 1546.91, 1552.93 vs 1571.20,
       1559.77 vs 1576.35 (mean 1559 vs 1570, ~0.7% slower). No win on this GPU;
       reverted.
-- [ ] register-resident Q8_0 SSM fragments.
+- [x] **register-resident Q8_0 SSM fragments + 4-channel boundary
+  convolution** (`b2ed28c`): `DenseF16GEMMKernel` gains `kRegisterWeights`
+  (`kSsmConv`): the SSM wave keeps its decoded F16 K16 fragments in registers
+  (`own_a_lo/hi`) and takes the peer half from `XorLane(..., 16)` instead of
+  reading them back from LDS, which also drops the SSM weight plane from the
+  stage; `SsmConvBoundaryKernel` now produces four channels per thread and all
+  three boundary rows of a tile per launch (grid z removed). Exact:
+  `--validate-prefill 64` rmse 0.39 / cosine 0.99 / max 1.88, greedy haiku
+  ("Time writes in the wet.") and the 1,951-token greedy prompt unchanged.
+  Measured interleaved: pp2048 d0 1730.31/1715.11 vs 1727.47/1727.99 (+0.3%),
+  1715.85/1720.50 vs 1714.82/1727.41 (neutral); d32K 1560.29/1556.72 vs
+  1568.01/1563.19 (+0.5%), 1549.19/1547.74 vs 1558.37/1559.70 (+0.7%).
+  Kept: exact and consistently ahead at depth, neutral at d0.
 - [~] 128-token gate/up and 64-token down tiles + tail kernel: the
       `W8A8TailKernel` slice (limits `kW8A8TailMax*`, `Materialize` helper,
       tail split in `HcDownF16Gemm`/`W8A8Gemm`, explicit-FMA rewrite of the
