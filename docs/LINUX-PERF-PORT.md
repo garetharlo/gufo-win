@@ -426,8 +426,23 @@ exists here as `keep_rollback_rows`; kernels only.
   vs 23.77±0.36 (+0.8%)**, tg d0/d32K neutral. Greedy haiku identical
   ('Time writes in the wet.'); `--validate-prefill 64` rmse 0.38 cosine 0.99
   max 1.96. Rollback: revert d6319c5.
-- [ ] Dense prefill attention per-tile overhead (2D window only).
-- [ ] Sparse softmax masking + pinned PV WMMAs.
+- [~] Dense prefill attention per-tile overhead + sparse softmax masking +
+      pinned PV WMMAs (WmmaCausalAttentionKernel slice). Ported fully from
+      upstream `5a1669a` (kScoreStride 20 + float4 softmax reads, parity-
+      grouped row_scale with float4 rescale reads, memcpy-packed p_lds rows,
+      dense fast paths in gather_tile/tile_key, per-lane block_selected,
+      dpp/perm V word staging, sched_barrier in the S loop, PV pin asm) as
+      `gufo-626-wmma*.exe`. Interleaved A/B vs `gufo-626-groups.exe` showed
+      **neutral** at pp2048 d0/d32K, but the GPU had drifted ~7% below
+      earlier-session numbers (1668 -> ~1550 pp d0, both binaries equally,
+      persisting after 15 min idle; no competing process, CPU zone 37 C,
+      rocm-smi unavailable to read GPU clocks). Could not demonstrate a win
+      under those conditions, so the slice stays **reverted** in the tree.
+      Re-port when the machine measures at its earlier level: the diff is in
+      the git stash-era binaries only, so reapply from upstream `5a1669a`
+      hunks @@ -3719..-4423 minus the separate k_lds/v_lds split (our kernel
+      keeps one kv_lds buffer, which is why upstream's phase-A/B pin does
+      not apply).
 
 Measured (commit `0857383`, bench `-p 2048 -n 16 -r 3` / `-r 2` at d128K):
 pp2048 d0 1667.06±6.79 (neutral), d32K 1522.05±4.81 (neutral), d128K
