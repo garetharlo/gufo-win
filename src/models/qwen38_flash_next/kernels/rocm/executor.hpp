@@ -361,8 +361,8 @@ private:
   /// `normed` says the previous Combine already produced m's grouped norm
   /// of res (F32 in s_.xn, or F16 plus tiled Q8 on the wide route).
   bool HcMix(const DeviceMixer& m, const float* res, bool normed, float* mixed,
-             float* inject, std::uint32_t n_tokens,
-             std::string* error_msg) const;
+             float* inject, std::uint32_t n_tokens, std::string* error_msg,
+             bool half_only = false) const;
   /// Share mixer projections across decode requests without selecting the
   /// prefill arithmetic. Injection rows are compact across the whole batch.
   bool HcMixBatch(const DeviceMixer& m, const float* res, bool normed,

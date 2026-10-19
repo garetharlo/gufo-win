@@ -366,7 +366,12 @@ stack, so checkpoint code is dropped from every slice.
   loads and `sched_barrier`.
 - [ ] `RoutedPadBounds` clears padding in-kernel, dropping two
   `hipMemsetAsync` calls.
-- [ ] `HcMix` `half_only`, skipping the F32 and Q8 copies.
+- [x] `HcMix` `half_only`, skipping the F32 and Q8 copies when both stacked
+  SSM projections read the F16 input the wide mixer already wrote. Needs the
+  `y != nullptr` guard in the `kHcMix` epilogue and the relaxed
+  `HcMixF16Gemm` argument check: measured +0.5% pp2048 d0, +0.1% d32K, tg
+  neutral, greedy haiku and `--validate-prefill 64` (rmse 0.42) byte-identical
+  to the GDN build.
 - [ ] PLE direct mapped n-gram input (`hipHostMallocMapped | Coherent`,
   `hipHostGetDevicePointer` into `s.ple_emb`, no F32 allocation or uploads).
 - [ ] `DenseBatch` 32-row chunk split for 64+ rows.
@@ -416,6 +421,18 @@ Changes:
 
 Windows fit: good; no io_uring. **Benchmark 2048 vs 4096 on Windows at
 d0/32K/128K before committing**; keep 2048 if the Windows sweep disagrees.
+
+Windows result for the chunk size alone (constant flipped, no prefetch
+plumbing), `-p 2048 -n 16 -d 0,32768,131072 -r 2`, one session:
+
+| chunk | pp2048 d0 | d32K | d128K |
+| --- | ---: | ---: | ---: |
+| 2048 | 1661.80 ± 13.46 | 1518.89 ± 2.23 | 1391.00 ± 2.90 |
+| 4096 | 1650.92 ± 14.91 | 1502.94 ± 11.49 | 1380.29 ± 9.17 |
+
+4096 is neutral to worse at every depth without the next-chunk gather
+overlap, so the constant stays at 2048. The rest of #470 only pays with the
+`Feed`/`Sync` `next`-span prefetch, which is not ported yet.
 
 Acceptance: logits independent of chunk size; long prompts faster; short
 prompts and decode not slower.

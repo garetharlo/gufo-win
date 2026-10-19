@@ -1279,7 +1279,7 @@ void Executor::Combine(float* res, const float* gamma,
 
 bool Executor::HcMix(const DeviceMixer& m, const float* res, bool normed,
                      float* mixed, float* inject, std::uint32_t n_tokens,
-                     std::string* error_msg) const {
+                     std::string* error_msg, bool half_only) const {
   const Config& c = config();
   // Without `normed` this mixer's grouped norm of res is computed here (F32);
   // otherwise the previous combine produced it, as F16 plus tiled Q8 on the
@@ -1339,6 +1339,10 @@ bool Executor::HcMix(const DeviceMixer& m, const float* res, bool normed,
   }
   const bool fused_inject =
       inject != nullptr && !m.inject.empty() && m.inject.type == GgmlType::kF32;
+  // A separate inject projection can overwrite the cached half input. Keep
+  // the full mixed row available for the following projection in that case.
+  half_only =
+      half_only && (inject == nullptr || m.inject.empty() || fused_inject);
   const float* xn = s_.xn;
   const bool vectorized =
       xn_half_ ||
@@ -1351,10 +1355,12 @@ bool Executor::HcMix(const DeviceMixer& m, const float* res, bool normed,
   if (xn_half_) {
     if (fused_projection) {
       if (!HcMixF16Gemm(m.up.data, reinterpret_cast<const __half*>(s_.hc_gate),
-                        s_.xn_half, fused_inject ? m.inject.f32() : nullptr,
-                        mixed, static_cast<__half*>(s_.x_half), s_.x_q8t,
-                        inject, n_tokens, c.hidden_size, c.hc_low_rank,
-                        stream_)) {
+                        s_.xn_half,
+                        fused_inject ? m.inject.f32() : nullptr,
+                        half_only ? nullptr : mixed,
+                        static_cast<__half*>(s_.x_half),
+                        half_only ? nullptr : s_.x_q8t, inject, n_tokens,
+                        c.hidden_size, c.hc_low_rank, stream_)) {
         AssignError(error_msg, "fused HC projection failed");
         return false;
       }
@@ -1370,9 +1376,11 @@ bool Executor::HcMix(const DeviceMixer& m, const float* res, bool normed,
       half_rows_ = n_tokens;
       half_cols_ = c.hidden_size;
       half_bf16_ = false;
-      q8t_src_ = mixed;
-      q8t_rows_ = n_tokens;
-      q8t_cols_ = c.hidden_size;
+      if (!half_only || !fused_projection) {
+        q8t_src_ = mixed;
+        q8t_rows_ = n_tokens;
+        q8t_cols_ = c.hidden_size;
+      }
     }
   } else if (vectorized) {
     HcMixEpilogueVec4(xn, s_.hc_gate, fused_inject ? m.inject.f32() : nullptr,
@@ -2295,7 +2303,15 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
         !Ple(l, session, n, s_.res, speculative, error_msg)) {
       return false;
     }
-    if (!HcMix(l.hc_attn, s_.res, normed, s_.mixed, s_.inject, n, error_msg)) {
+    // Both stacked SSM projections consume the same F16 input. Avoid writing
+    // unused F32/Q8 copies when the wide mixer can supply that input directly.
+    const bool half_only =
+        prefill_phase && !speculative && n >= 1024 &&
+        n <= options_.max_batch && l.linear && DenseF16Route(l.ssm_in, n) &&
+        l.ssm_alpha_beta.type == GgmlType::kF16 &&
+        l.ssm_alpha_beta.cols == l.ssm_in.cols;
+    if (!HcMix(l.hc_attn, s_.res, normed, s_.mixed, s_.inject, n, error_msg,
+               half_only)) {
       return false;
     }
     // The last target layer's query outputs have no later cache consumer.
