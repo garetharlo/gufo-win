@@ -414,8 +414,18 @@ exists here as `keep_rollback_rows`; kernels only.
   tie-chunk mask writes, `FindHistogramThreshold` gains `kBins, kBlock`
   template params. (No `CompactSelectionKernel` here: this fork compacts
   inside `AttentionKernel`, a known local/upstream difference.)
-- [ ] Decode attention head groups (`AttentionKernel<kGroup>` 2/4 query
-  heads per block sharing K/V loads).
+- [x] Decode attention head groups (`AttentionKernel<kGroup>` 2/4 query
+  heads per block sharing K/V loads). Adapted to the fork's in-kernel
+  compaction: the compaction pass and `tile_step` K/V loads are shared by the
+  whole group; per-group `m`/`l`/`acc` and a per-group epilogue with
+  `__syncthreads()` between heads (shared `red` reused). Launcher:
+  `(heads/kv_heads)%4==0`, `n_tokens<=2` → `<2>` grid `(heads/2, t, z)`,
+  else `<4>` grid `(heads/4, t, z)`.
+  Measured `gufo-626-groups.exe`: pp d0 1668.01 / d32K 1526.25 / d128K
+  1403.28±11.50 (all neutral vs the selection slice), **tg16 d128K 23.57±0.32
+  vs 23.77±0.36 (+0.8%)**, tg d0/d32K neutral. Greedy haiku identical
+  ('Time writes in the wet.'); `--validate-prefill 64` rmse 0.38 cosine 0.99
+  max 1.96. Rollback: revert d6319c5.
 - [ ] Dense prefill attention per-tile overhead (2D window only).
 - [ ] Sparse softmax masking + pinned PV WMMAs.
 
