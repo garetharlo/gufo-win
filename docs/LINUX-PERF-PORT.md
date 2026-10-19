@@ -516,8 +516,16 @@ a tile, software-pipelined attention, GDN q/k in registers.
   (+1.4%, +3.1%); d32K 1528.73 -> 1555.96 and 1517.44 -> 1556.64
   (+1.8%, +2.6%); d128K 1421.80 -> 1429.57 (+0.6%); tg neutral
   (28.46/28.35/26.21/26.05 unchanged within noise).
-- [ ] gate/up fused rows (paired shared-expert W8A8 rejected upstream).
-- [ ] shared K16 fragments.
+- [~] gate/up fused rows + shared K16 fragments: the paired-wave rewrite of
+      `RoutedF16GEMMKernel<..., kPair=true>` (register-resident codes and affine
+      words, `XorLane` peer exchange for the second K16 fragment, fixed code
+      cache group per stage, F16-staged SwiGLU epilogue) was ported whole. Exact:
+      greedy 1,951-token prompt (32 tokens) and the greedy haiku unchanged.
+      Measured, interleaved: pp2048 d0 1731.65 -> 1739.75, 1739.95 -> 1708.66,
+      1713.39 vs 1744.75, 1718.35 vs 1737.18 (mean 1720 vs 1738, ~1% slower);
+      d32K 1559.60 -> 1576.13, 1571.71 -> 1546.91, 1552.93 vs 1571.20,
+      1559.77 vs 1576.35 (mean 1559 vs 1570, ~0.7% slower). No win on this GPU;
+      reverted.
 - [ ] register-resident Q8_0 SSM fragments.
 - [~] 128-token gate/up and 64-token down tiles + tail kernel: the
       `W8A8TailKernel` slice (limits `kW8A8TailMax*`, `Materialize` helper,
