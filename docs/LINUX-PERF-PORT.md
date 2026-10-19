@@ -507,7 +507,17 @@ a tile, software-pipelined attention, GDN q/k in registers.
 - [ ] shared K16 fragments.
 - [ ] register-resident Q8_0 SSM fragments.
 - [ ] deferred residual in MoE combine (`HcCombineF16` defer_w/inject_out).
-- [ ] 128-token gate/up and 64-token down tiles + tail kernel.
+- [~] 128-token gate/up and 64-token down tiles + tail kernel: the
+      `W8A8TailKernel` slice (limits `kW8A8TailMax*`, `Materialize` helper,
+      tail split in `HcDownF16Gemm`/`W8A8Gemm`, explicit-FMA rewrite of the
+      tiled accumulator) was ported and built as `gufo-571-tail.exe`. Exact:
+      `--validate-prefill 64` rmse 0.38 / cosine 0.99 / max 1.96 and greedy
+      haiku ("Time writes in the wet.") both unchanged. Interleaved A/B vs
+      `gufo-626-groups.exe` at the only shape this pipeline can feed it
+      (`-p 2179`: last chunk 131 rows -> 128 tiled + 3 tail): pp 1500.19 ->
+      1489.98 and 1497.06 -> 1492.32, tg neutral. No win: upstream's +1.1%
+      needs whole-prompt batches a few tokens past a 128 multiple, while our
+      2048-token chunking rarely lands the final chunk in 129-144. Reverted.
 - [ ] software-pipelined attention, GDN q/k in registers.
 
 Windows fit: pure HIP, but large kernel rewrite against a diverged fork. Do
