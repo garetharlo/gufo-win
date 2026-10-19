@@ -401,7 +401,30 @@ This is the documented FP reassociation the acceptance criteria allow;
 prefill validation and decode rates are unaffected, and no sampling,
 draft-vocabulary or precision change is involved.
 
-### [ ] #470 - 4096-token prefill chunks + overlapped n-gram gather
+### [~] #626 — cut prefill and decode attention cost at depth
+
+Upstream: `5a1669a`. Upstream measured pp128K 1511 → 1539 tok/s, sparse
+attention 107.1 → ~96 ms per pp2048 at 30K, tg64 d128K 27.5 → 27.85. All
+changes byte-exact. The upstream executor-side MTP-scratch reuse already
+exists here as `keep_rollback_rows`; kernels only.
+
+- [x] **Selection mark/compact**: `SelectMarkKernel` templated on `kBlock`
+  with 1,024-thread narrow-batch launch for `n_tokens <= 4`, vectorized
+  `uint4` score loads (`for_each_score`, 4×16 B per thread), batched
+  tie-chunk mask writes, `FindHistogramThreshold` gains `kBins, kBlock`
+  template params. (No `CompactSelectionKernel` here: this fork compacts
+  inside `AttentionKernel`, a known local/upstream difference.)
+- [ ] Decode attention head groups (`AttentionKernel<kGroup>` 2/4 query
+  heads per block sharing K/V loads).
+- [ ] Dense prefill attention per-tile overhead (2D window only).
+- [ ] Sparse softmax masking + pinned PV WMMAs.
+
+Measured (commit `0857383`, bench `-p 2048 -n 16 -r 3` / `-r 2` at d128K):
+pp2048 d0 1667.06±6.79 (neutral), d32K 1522.05±4.81 (neutral), d128K
+**1414.03±24.54 vs 1391.00** (+1.7%), tg16 neutral at all depths. Greedy
+haiku identical ("Time writes in the wet."). Rollback: revert `0857383`.
+
+
 
 Upstream: `47b6391`. **6–11% faster for 24K–102K prompts**, prompts under 8K
 not slower, decode unchanged, +1.3 GiB at 262K.
