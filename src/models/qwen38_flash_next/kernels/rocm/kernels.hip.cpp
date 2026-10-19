@@ -5282,7 +5282,8 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
           value.y *= 0.25F;
           value.z *= 0.25F;
           value.w *= 0.25F;
-          *reinterpret_cast<float4*>(y + token * hidden + h) = value;
+          if (y != nullptr)
+            *reinterpret_cast<float4*>(y + token * hidden + h) = value;
           if (mixed_half != nullptr) {
             *reinterpret_cast<__half2*>(mixed_half + token * hidden + h) =
                 __floats2half2_rn(value.x, value.y);
@@ -5467,7 +5468,8 @@ bool HcMixF16Gemm(const void* up, const __half* low_rank, const __half* xn,
                   std::uint32_t hidden, std::uint32_t rank,
                   hipStream_t stream) {
   if (n_tokens < 96 || hidden != 2560 || rank != 320 || up == nullptr ||
-      low_rank == nullptr || xn == nullptr || mixed == nullptr ||
+      low_rank == nullptr || xn == nullptr ||
+      (mixed == nullptr && mixed_half == nullptr && mixed_q8 == nullptr) ||
       (inject_w != nullptr && inject == nullptr)) {
     return false;
   }
