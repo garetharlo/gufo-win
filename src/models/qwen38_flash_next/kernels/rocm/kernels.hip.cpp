@@ -2439,6 +2439,76 @@ __launch_bounds__(kBlock) __global__
   }
 }
 
+/// grid n_tokens rows, block 256. Writes row t's selected complete blocks, in
+/// ascending order, to lists[t * capacity ..] and their number to counts[t].
+/// AttentionKernel would otherwise rebuild this list in every (head, split)
+/// block, walking all of the row's mask words each time.
+/// Invariant: a row has at most `capacity` selected blocks. SelectMarkKernel
+/// marks at most budget = indexer_top_k / compress_ratio blocks per row and
+/// the executor passes that budget as `capacity`, so the guards below never
+/// trigger; they only keep a broken invariant from writing out of bounds.
+__global__ void CompactSelectionKernel(
+    const std::uint32_t* mask, std::uint32_t mask_words,
+    const std::uint32_t* start_pos, std::uint32_t ratio, std::uint32_t* lists,
+    std::uint32_t* counts, std::uint32_t capacity) {
+  constexpr std::uint32_t kWindow = 1024;  // blocks compacted per pass
+  __shared__ std::uint32_t wave_total[8];
+  const std::uint32_t t = blockIdx.x;
+  const std::uint32_t i = threadIdx.x;
+  const std::uint32_t lane = i & 31u;
+  const std::uint32_t wave = i >> 5u;
+  const std::uint32_t n_kv = *start_pos + t + 1;
+  const std::uint32_t n_complete = n_kv / ratio;  // tail_start / ratio
+  const std::uint32_t* words = mask + static_cast<std::size_t>(t) * mask_words;
+  std::uint32_t* out = lists + static_cast<std::size_t>(t) * capacity;
+  std::uint32_t written = 0;  // selected blocks of the earlier windows
+  for (std::uint32_t w0 = 0; w0 < n_complete; w0 += kWindow) {
+    // Thread i owns blocks w0 + 4i .. +3 of the window, which share one mask
+    // word; an exclusive block-wide scan gives each its output slot.
+    std::uint32_t flags = 0;
+    std::uint32_t count = 0;
+    const std::uint32_t b0 = w0 + (i * 4);
+    const std::uint32_t word = b0 < n_complete ? words[b0 / 32] : 0u;
+    for (std::uint32_t k = 0; k < 4; ++k) {
+      const std::uint32_t b = b0 + k;
+      const bool set = b < n_complete && ((word >> (b % 32)) & 1u);
+      flags |= (set ? 1u : 0u) << k;
+      count += set ? 1u : 0u;
+    }
+    std::uint32_t incl = count;
+    for (std::uint32_t off = 1; off < 32; off <<= 1) {
+      const std::uint32_t v = __shfl_up(incl, off);
+      incl += lane >= off ? v : 0u;
+    }
+    if (lane == 31) {
+      wave_total[wave] = incl;
+    }
+    __syncthreads();
+    std::uint32_t base = 0;
+    for (std::uint32_t w = 0; w < wave; ++w) {
+      base += wave_total[w];
+    }
+    std::uint32_t total = 0;
+    for (std::uint32_t w = 0; w < 8; ++w) {
+      total += wave_total[w];
+    }
+    std::uint32_t slot = written + base + incl - count;
+    for (std::uint32_t k = 0; k < 4; ++k) {
+      if ((flags >> k) & 1u) {
+        if (slot < capacity) {
+          out[slot] = w0 + (i * 4) + k;
+        }
+        ++slot;
+      }
+    }
+    written += total;
+    __syncthreads();  // wave_total is rewritten by the next window
+  }
+  if (i == 0) {
+    counts[t] = min(written, capacity);
+  }
+}
+
 /// grid (heads, queries), block 256 = head dim. Keys stream in tiles of 256
 /// positions: lane j scores key j of the tile, then lane d accumulates
 /// value column d with online softmax rescaling. In the sparse window the
@@ -2453,14 +2523,18 @@ __launch_bounds__(kBlock) __global__
 /// block loads serves kGroup heads, so the deep-context loads amortize.
 /// Two heads per block keep enough blocks in flight for one or two rows;
 /// four suit wider verification batches (measured at d32K/d128K).
-template <std::uint32_t kGroup>
-__global__ void AttentionKernel(const float* q, const __half* k_cache,
-                                const __half* v_cache,
-                                const std::uint32_t* mask,
-                                std::uint32_t mask_words, float* out,
-                                float* partials, const std::uint32_t* start_pos,
-                                std::uint32_t heads, std::uint32_t kv_heads,
-                                std::uint32_t d, std::uint32_t ratio) {
+/// With `lists`/`counts` (CompactSelectionKernel's output, ratio 4 only) the
+/// selected blocks are read from the ready-made list instead of being
+/// compacted from the mask. The tiles are the same ones the mask walk cuts,
+/// so the output is bitwise identical.
+template<std::uint32_t kGroup>
+__global__ void AttentionKernel(
+    const float* q, const __half* k_cache, const __half* v_cache,
+    const std::uint32_t* mask, std::uint32_t mask_words, float* out,
+    float* partials, const std::uint32_t* start_pos, std::uint32_t heads,
+    std::uint32_t kv_heads, std::uint32_t d, std::uint32_t ratio,
+    const std::uint32_t* lists, const std::uint32_t* counts,
+    std::uint32_t capacity) {
   constexpr std::uint32_t kTile = 256;
   constexpr std::uint32_t kWindow = 1024;  // blocks compacted per pass
   const std::uint32_t split = blockIdx.z;
@@ -2559,7 +2633,8 @@ __global__ void AttentionKernel(const float* q, const __half* k_cache,
       const float tile_max = BlockMax(s_mine[g], shared);
       const float m_new = fmaxf(m[g], tile_max);
       const float rescale = m[g] == -INFINITY ? 0.0f : __expf(m[g] - m_new);
-      const float pj = s_mine[g] == -INFINITY ? 0.0f : __expf(s_mine[g] - m_new);
+      const float pj =
+          s_mine[g] == -INFINITY ? 0.0f : __expf(s_mine[g] - m_new);
       p[g][i] = pj;
       const float tile_sum = BlockSum(pj, shared);
       l[g] = l[g] * rescale + tile_sum;
@@ -2605,7 +2680,32 @@ __global__ void AttentionKernel(const float* q, const __half* k_cache,
     }
   } else {
     const std::uint32_t n_complete = tail_start / ratio;
+    const std::uint32_t* row =
+        lists == nullptr ? nullptr
+                         : lists + static_cast<std::size_t>(t) * capacity;
+    const std::uint32_t ready = row == nullptr ? 0 : counts[t];
+    std::uint32_t next = 0;  // list entries of the windows already passed
     for (std::uint32_t w0 = 0; w0 < n_complete; w0 += kWindow) {
+      if (row != nullptr) {
+        // The list is ascending, so this window's entries are the run below
+        // the window's end: the same set the mask walk compacts here.
+        std::uint32_t last = next;
+        while (last < ready && row[last] < w0 + kWindow) {
+          ++last;
+        }
+        const std::uint32_t total = last - next;
+        const std::uint32_t base = next;
+        next = last;
+        for (std::uint32_t t0 = split * (kTile / ratio); t0 < total;
+             t0 += (kTile / ratio) * splits) {
+          const std::uint32_t entry = t0 + (i / ratio);
+          keys[i] =
+              entry < total ? (row[base + entry] * ratio) + (i % ratio) : n_kv;
+          __syncthreads();
+          tile_step();
+        }
+        continue;
+      }
       // Thread i owns blocks w0 + 4i .. +3 of the window: flag the selected
       // ones and compact their indices with a block-wide exclusive scan.
       std::uint32_t flags = 0;
@@ -2671,7 +2771,8 @@ __global__ void AttentionKernel(const float* q, const __half* k_cache,
     }
     if (splits == 1) {
       if (i < d) {
-        out[(static_cast<std::size_t>(t) * heads + h0 + g) * d + i] = total / l[g];
+        out[(static_cast<std::size_t>(t) * heads + h0 + g) * d + i] =
+            total / l[g];
       }
       __syncthreads();
       continue;
@@ -6438,11 +6539,25 @@ void Attention(const float* q, const __half* k_cache, const __half* v_cache,
                float* partials, std::uint32_t splits, std::uint32_t n_tokens,
                const std::uint32_t* start_pos, std::uint32_t heads,
                std::uint32_t kv_heads, std::uint32_t d, std::uint32_t ratio,
-               hipStream_t stream) {
+               hipStream_t stream, std::uint32_t* lists, std::uint32_t* counts,
+               std::uint32_t list_capacity) {
   if (d != 256) {
     return;  // the kernel is written for the model's 256-wide heads
   }
   const std::uint32_t z = partials != nullptr ? std::max(splits, 1u) : 1u;
+  if (ratio != 4 || mask == nullptr || lists == nullptr || counts == nullptr ||
+      list_capacity == 0) {
+    lists = nullptr;
+    counts = nullptr;
+    list_capacity = 0;
+  }
+  if (lists != nullptr) {
+    // Compact each row's selection once; the attention blocks of every head
+    // and split then read the list. Both launches read *start_pos on device.
+    hipLaunchKernelGGL(CompactSelectionKernel, dim3(n_tokens), dim3(kThreads),
+                       0, stream, mask, mask_words, start_pos, ratio, lists,
+                       counts, list_capacity);
+  }
   // Query heads sharing a KV head share each block's K/V loads. Two per
   // block keep enough blocks in flight for one or two rows; four suit wider
   // verification batches (measured at d32K/d128K).
@@ -6453,12 +6568,12 @@ void Attention(const float* q, const __half* k_cache, const __half* v_cache,
     hipLaunchKernelGGL((AttentionKernel<2>), dim3(heads / 2, n_tokens, z),
                        dim3(kThreads), 0, stream, q, k_cache, v_cache, mask,
                        mask_words, out, partials, start_pos, heads, kv_heads, d,
-                       ratio);
+                       ratio, lists, counts, list_capacity);
   } else {
     hipLaunchKernelGGL((AttentionKernel<4>), dim3(heads / 4, n_tokens, z),
                        dim3(kThreads), 0, stream, q, k_cache, v_cache, mask,
                        mask_words, out, partials, start_pos, heads, kv_heads, d,
-                       ratio);
+                       ratio, lists, counts, list_capacity);
   }
   if (z > 1) {
     hipLaunchKernelGGL(AttentionMergeKernel, dim3(heads, n_tokens),

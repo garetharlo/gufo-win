@@ -490,7 +490,9 @@ private:
     std::uint32_t* mask;
     float* scores;
     float* ctx;
-    float* attn_partials;  ///< split-key partials of a narrow batch
+    float* attn_partials;        ///< split-key partials of a narrow batch
+    std::uint32_t* attn_lists;   ///< compacted key blocks per token
+    std::uint32_t* attn_counts;  ///< compacted list lengths
     // ple
     float* ple_emb;
     float* ple_key;
