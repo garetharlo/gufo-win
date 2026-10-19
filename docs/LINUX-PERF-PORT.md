@@ -257,6 +257,27 @@ Acceptance: bit-identical outputs; measure tg at d0/32K, single and 4 sessions.
 
 Windows port log (in progress):
 
+- [x] Stage 1, all eight `mmq/*` files (`5749c46`): a three-way merge against
+  `7e4621c^` (base) and `7e4621c` (theirs) is clean for every file once the
+  blobs' LF is matched to the working tree's CRLF; the result is byte-equal to
+  upstream's post-state for those files. Brings `q4_K_scale_pair` (both Q4_K
+  block-scale packings formed before the select, so the third word's load is
+  no longer sunk behind a divergent branch), the Q8_1-by-expert producer,
+  `mul_mat_vec_moe_dispatch` `dst_slots`, `mmvq_moe_group_ints`,
+  `qfn_mmq_moe_gated_vec_preq` and the IQ3_S/IQ4_XS/IQ4_NL MoE types. The
+  producer and `preq` entry points stay unused until stage 3 wires the
+  executor; the reachable part is the Q4_K scale read plus the common/MMVQ
+  helpers. Bit-identical: haiku, 1,951-token greedy prompt and
+  `--validate-prefill 64` (rmse 0.39, cosine 0.99, max 1.88) all match
+  `gufo-622-lists`. Interleaved `-p 2048 -n 16 -d 0,32768 -r 2`: tg16 d0
+  28.19/28.20 -> 28.22/28.30, tg16 d32K 25.89/26.03 -> 26.15/26.18 (+0.8%),
+  pp2048 d0 1745.67/1733.04 -> 1735.43/1729.14 (noise). Kept.
+- [ ] Stage 2: the `kernels.hip.cpp` decode hunks that need no executor
+  wiring (DPP `XorLane` swaps, batched attention loads, vector loads).
+- [ ] Stage 3: the executor fused Q8_1 producers (`HcCombineQ8_1`,
+  `SiluScaleQ8_1`, `SigmoidMulQ8_1`, `ReadyQ8` row reuse, `Q8Input` dense
+  overloads) — the bulk of the claim, and the reason the unused stage 1
+  entry points exist.
 - `git merge-file` against base `fee9d2a` (fork HEAD `2eb0778`, upstream `7e4621c`)
   over the commit's 13 `src/` files: `batch.cpp`, `kernels.hpp`, all of
   `mmq/*` merge clean; `kernels.hip.cpp` has 1 comment-only conflict;
