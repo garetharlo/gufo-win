@@ -467,6 +467,12 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   s.ctx = f32(T * c.AttentionQDim());
   s.attn_partials = f32(static_cast<std::size_t>(kVecBatch) * c.num_heads *
                         kAttnSplits * (c.head_dim + 2));
+  s.attn_lists = Alloc<std::uint32_t>(
+      a,
+      std::size_t{kVecBatch} *
+          static_cast<std::size_t>(c.indexer_top_k / c.compress_ratio),
+      error_msg);
+  s.attn_counts = Alloc<std::uint32_t>(a, kVecBatch, error_msg);
   if (c.ple_layer >= 0) {
     s.ple_emb = f32(T * c.PleEmbeddingDim());
     // PLE finishes before this layer's mixer/SSM. Its gate consumes key
@@ -1819,10 +1825,12 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
   // Narrow batches split each row's key tiles over kAttnSplits blocks so a
   // decode step at depth fills the device.
   const bool split = !MatrixRows(n_tokens);
-  rocm::Attention(s_.q, s.k_cache, s.v_cache, mask, mask_words_, s_.ctx,
-                  split ? s_.attn_partials : nullptr, kAttnSplits, n_tokens,
-                  pos, c.num_heads, c.num_kv_heads, c.head_dim,
-                  c.compress_ratio, stream_);
+  rocm::Attention(
+      s_.q, s.k_cache, s.v_cache, mask, mask_words_, s_.ctx,
+      split ? s_.attn_partials : nullptr, kAttnSplits, n_tokens, pos,
+      c.num_heads, c.num_kv_heads, c.head_dim, c.compress_ratio, stream_,
+      split ? s_.attn_lists : nullptr, split ? s_.attn_counts : nullptr,
+      c.compress_ratio > 0 ? c.indexer_top_k / c.compress_ratio : 0);
   SigmoidMul(s_.ctx, s_.attn_gate,
              static_cast<std::size_t>(n_tokens) * c.AttentionQDim(), stream_);
   return !project_output || Dense(l.attn_out, s_.ctx, out, n_tokens, error_msg);
@@ -2356,11 +2364,11 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     }
     // Both stacked SSM projections consume the same F16 input. Avoid writing
     // unused F32/Q8 copies when the wide mixer can supply that input directly.
-    const bool half_only =
-        prefill_phase && !speculative && n >= 1024 &&
-        n <= options_.max_batch && l.linear && DenseF16Route(l.ssm_in, n) &&
-        l.ssm_alpha_beta.type == GgmlType::kF16 &&
-        l.ssm_alpha_beta.cols == l.ssm_in.cols;
+    const bool half_only = prefill_phase && !speculative && n >= 1024 &&
+                           n <= options_.max_batch && l.linear &&
+                           DenseF16Route(l.ssm_in, n) &&
+                           l.ssm_alpha_beta.type == GgmlType::kF16 &&
+                           l.ssm_alpha_beta.cols == l.ssm_in.cols;
     if (!HcMix(l.hc_attn, s_.res, normed, s_.mixed, s_.inject, n, error_msg,
                half_only)) {
       return false;
