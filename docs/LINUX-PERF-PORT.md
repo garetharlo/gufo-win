@@ -503,10 +503,22 @@ a tile, software-pipelined attention, GDN q/k in registers.
   `--validate-prefill 64` (rmse 0.42, cosine 0.99, max 2.10) both identical
   to `5629bc7`. Measured: pp2048 d0 1667.03±6.03 (neutral), d32K
   1523.20±5.28 (+0.3% over 1518.53), tg neutral.
+- [x] **deferred residual + inject partials in the combines**: `HcCombineF16`
+  gains `defer_w`/`inject_out`/`inject_w`, `HcCombineMoeF16` gains
+  `prior_out`/`prior_w`/`inject_out`/`inject_w` (both kernels get `kDefer`/
+  `kPrior`/`kInject` stages, `HcInjectPart`, and `HcApplyDeferred`); the executor
+  defers the attention-side residual across a fused-MoE FFN combine and the
+  combine writes the next mixer's inject partials from its F16 norm, so `HcMix`
+  skips its inject pass. Exact: `--validate-prefill 64` rmse 0.39 / cosine 0.99
+  / max 1.88, greedy haiku unchanged, and a 1,951-token teacher-forced prompt
+  produced the same 32 greedy tokens as `gufo-626-groups`. Measured (interleaved,
+  same sitting): pp2048 d0 1691.13 -> 1714.27 and 1667.41 -> 1718.48
+  (+1.4%, +3.1%); d32K 1528.73 -> 1555.96 and 1517.44 -> 1556.64
+  (+1.8%, +2.6%); d128K 1421.80 -> 1429.57 (+0.6%); tg neutral
+  (28.46/28.35/26.21/26.05 unchanged within noise).
 - [ ] gate/up fused rows (paired shared-expert W8A8 rejected upstream).
 - [ ] shared K16 fragments.
 - [ ] register-resident Q8_0 SSM fragments.
-- [ ] deferred residual in MoE combine (`HcCombineF16` defer_w/inject_out).
 - [~] 128-token gate/up and 64-token down tiles + tail kernel: the
       `W8A8TailKernel` slice (limits `kW8A8TailMax*`, `Materialize` helper,
       tail split in `HcDownF16Gemm`/`W8A8Gemm`, explicit-FMA rewrite of the
