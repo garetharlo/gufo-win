@@ -222,7 +222,7 @@ function New-Plan($o, $f) {
     @("--temperature", $temp.ToString($invariant), "--top-p", $topP.ToString($invariant), "--top-k", "$topK", "--min-p", "0")
   } else { @("--temperature", "0.7", "--top-p", "0.8", "--top-k", "20", "--min-p", "0") }
   $hostName = if ($f.Lan) { "0.0.0.0" } else { "127.0.0.1" }
-  $server = @("serve", "--host", $hostName, "--port", "8080", "--sessions", "1")
+  $server = @("serve", "--host", $hostName, "--port", "8888", "--sessions", "1")
   if ($f.Vision) { $server += @("--max-request-bytes", "33554432") }   # base64 images next to a long chat
   $llm = @("llm", "--model", $t.Path, "--served-model-name", $o.Info.ServedName, "--context", "$($f.Context)",
     "--max-output-bytes", "8388608", "--think", $(if ($f.Think) { "on" } else { "off" })) + $sampling
@@ -257,7 +257,7 @@ function New-Plan($o, $f) {
   }
   [pscustomobject]@{
     Title = "$($t.Name) $($t.Quant): $($labels -join ', '), $([int]$f.Context / 1024)K context, thinking $(if ($f.Think) { 'on' } else { 'off' })"
-    Args = @($server + $llm); Env = [pscustomobject]$vars; Port = 8080; Host = $hostName; ServedName = $o.Info.ServedName
+    Args = @($server + $llm); Env = [pscustomobject]$vars; Port = 8888; Host = $hostName; ServedName = $o.Info.ServedName
   }
 }
 
