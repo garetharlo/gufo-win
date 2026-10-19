@@ -288,10 +288,39 @@ Windows port log (in progress):
   26.15/26.08 -> 26.54/26.51 (+1.4%), pp2048 d0 1742.19/1716.73 ->
   1726.39/1724.55 (noise), pp2048 d32K 1572.79/1565.14 -> 1576.84/1570.90
   (+0.3%). Kept.
-- [ ] Stage 2b: the remaining `kernels.hip.cpp` rewrites that need no
-  executor wiring (`RmsNormCachedKernel`, the `kStreams`-templated
-  `HcMixEpilogueKernel`, `SmallGemmKernel`, the batched attention loads and
-  the vector-load hunks).
+- [x] Stage 2b (`5a29fee`): `HcMixEpilogueKernel` is now templated on
+  `kStreams` with the model's four-stream shape launched as `<4>` (every
+  stream read issued up front, the inject weights cached before the `mixed`
+  store, the sums still running stream by stream in order) and gains the
+  optional `mixed_q8` output that stage 3 will fill; `SmallGemmKernel` loads
+  a lane's steps `kSteps` at a time (4 at `tokens <= 2`, else 2) and takes an
+  unchecked `float4` row path (`kWhole`) for F32 rows whose length is a whole
+  number of passes, still adding a fresh four-product `dot` to `acc` per step
+  — the first cut folded `acc` into one `fma` chain, which groups the sum
+  differently from the checked path and was rewritten before the slice
+  passed. Bit-identical: haiku, 1,951-token greedy prompt (only the
+  `[Model Load]` line differs) and `--validate-prefill 64` (rmse 0.39,
+  cosine 0.99, max 1.88). Interleaved `-p 2048 -n 16 -d 0,32768 -r 2`
+  against the stage 2a binary: tg16 d0 28.57/28.56 -> 29.08/29.13 (+1.9%),
+  tg16 d32K 26.40/26.54 -> 27.02/27.04 (+2.1%), pp2048 d0 1739.34/1724.79 ->
+  1732.28/1729.55, pp2048 d32K 1578.20/1571.42 -> 1579.38/1570.15 (both
+  noise). Kept.
+- Stage 2b dropped two pieces after measurement:
+  `RmsNormCachedKernel<10>/<40>` (every element and gamma lane loaded into
+  registers before the sum) was bit-identical but moved nothing: tg16 d0
+  29.14/29.13 and d32K 27.05/27.00 with it off versus 29.08/29.13 and
+  27.02/27.04 with it on, while pp2048 d0 read 1742.60/1722.30 with it off
+  and 1731.87/1717.17 with it on (about 0.4-0.7% lower in both rounds); the
+  kernel and its dispatch were deleted. The batched attention loads
+  (`load_batch` over `kBatch = 8` keys, clamping empty lanes instead of
+  skipping their row) failed bit-identity: `--validate-prefill 64` gave rmse
+  0.36 against the expected 0.39 and both text gates diverged. Reverting only
+  the attention hunks restored all three gates, so the batch itself is the
+  cause; the arithmetic it feeds (`acc[g][x] += w[g] * vv[x]` over an
+  unrolled eight-key loop) is the only place whose reassociation exposure
+  changes, and pinning it would need a per-element barrier. Reverted; the
+  hunk stays unported. The remaining vector-load hunks were part of that
+  batch.
 - [ ] Stage 3: the executor fused Q8_1 producers (`HcCombineQ8_1`,
   `SiluScaleQ8_1`, `SigmoidMulQ8_1`, `ReadyQ8` row reuse, `Q8Input` dense
   overloads) — the bulk of the claim, and the reason the unused stage 1
