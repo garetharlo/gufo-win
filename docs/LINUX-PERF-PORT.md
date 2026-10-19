@@ -433,16 +433,15 @@ exists here as `keep_rollback_rows`; kernels only.
       dense fast paths in gather_tile/tile_key, per-lane block_selected,
       dpp/perm V word staging, sched_barrier in the S loop, PV pin asm) as
       `gufo-626-wmma*.exe`. Interleaved A/B vs `gufo-626-groups.exe` showed
-      **neutral** at pp2048 d0/d32K, but the GPU had drifted ~7% below
-      earlier-session numbers (1668 -> ~1550 pp d0, both binaries equally,
-      persisting after 15 min idle; no competing process, CPU zone 37 C,
-      rocm-smi unavailable to read GPU clocks). Could not demonstrate a win
-      under those conditions, so the slice stays **reverted** in the tree.
-      Re-port when the machine measures at its earlier level: the diff is in
-      the git stash-era binaries only, so reapply from upstream `5a1669a`
-      hunks @@ -3719..-4423 minus the separate k_lds/v_lds split (our kernel
-      keeps one kv_lds buffer, which is why upstream's phase-A/B pin does
-      not apply).
+      **neutral** at pp2048 d0/d32K, measured while the GPU had drifted ~7%
+      below earlier-session numbers (1668 -> ~1550 pp d0, both binaries
+      equally, fixed by a reboot). **Post-reboot validation (pp d0
+      1687/1667):** warm interleaved A/B neutral at d0 (1666.58 vs 1667.71),
+      +0.6% at d32K (1516.41 vs 1525.47); the first cold run favors the
+      reference by 2.3%. Confirmed: no reliable win on our kernel, which
+      lacks upstream's split `k_lds`/`v_lds` two-buffer phase pipeline this
+      slice was tuned for (we keep one `kv_lds`, so the phase-A/B PV pin does
+      not apply). Slice stays reverted; #626 is done (slices 1-2 landed).
 
 Measured (commit `0857383`, bench `-p 2048 -n 16 -r 3` / `-r 2` at d128K):
 pp2048 d0 1667.06±6.79 (neutral), d32K 1522.05±4.81 (neutral), d128K
