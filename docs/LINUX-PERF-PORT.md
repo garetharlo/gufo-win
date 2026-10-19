@@ -555,14 +555,35 @@ a tile, software-pipelined attention, GDN q/k in registers.
 Windows fit: pure HIP, but large kernel rewrite against a diverged fork. Do
 last; port one kernel family at a time.
 
-### [ ] #622 — compact sparse attention selections once per row
+### [x] #622 — compact sparse attention selections once per row
 
 Upstream: `baf5a1b`. **+3.3% at 160K**, server deep decode **+1.4–2.4%**,
 bitwise identical.
 
-Local state: `AttentionKernel` already compacts inside the kernel
-(`kernels.hip.cpp:2835–2894`), but rebuilds the list per (head, split). Upstream
-adds `CompactSelectionKernel` and reads the per-row list once. Incremental.
+Local state: `AttentionKernel` compacted the row's selected blocks inside the
+kernel, rebuilding the same list in every (head, split) block. A new
+`CompactSelectionKernel` compacts each row once into `attn_lists`/`attn_counts`
+(`executor.hpp`/`executor.cpp` scratch, `kVecBatch * indexer_top_k /
+compress_ratio` entries) and the kernel reads that list window-by-window with a
+uniform cursor, so it cuts the same tiles in the same order as the mask walk and
+stays bitwise identical: haiku, the 1,951-token greedy prompt and
+`--validate-prefill 64` (rmse 0.39 / cosine 0.99 / max 1.88) all unchanged.
+
+The list path only runs for the ratio-4 sparse mask on narrow (`split`)
+batches; prefill and wide batches keep the mask walk, and the mandate to
+`SelectMarkKernel`'s budget keeps a row's list within `capacity`.
+
+Measured, interleaved (`-p 2048 -n 16 -r 2`), two rounds per side:
+
+| metric | before | after |
+| --- | --- | --- |
+| pp2048 d0 | 1731.95 / 1713.97 | 1726.01 / 1721.93 |
+| tg16 d32K | 26.07 / 26.17 | 26.03 / 26.03 |
+| pp2048 d128K | 1444.84 / 1428.24 | 1449.91 / 1449.80 |
+| tg16 d128K | 23.53 / 23.49 | 23.40 / 23.41 |
+
+Decode at depth improves +0.4–0.5% in 4 of 4 paired rounds; prefill is inside
+its run-to-run noise. Kept.
 
 Windows fit: pure HIP.
 
