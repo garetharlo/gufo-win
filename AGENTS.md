@@ -65,3 +65,4 @@ quality; successful optimizations become the default, without extra switches.
 - Follow Conventional Commits with a single-line message.
 - Prefer `jj` when available (`jj version`); otherwise use Git.
 - Follow the user's remote workflow and preserve unrelated work.
+- Windows performance-port plan and status: [docs/LINUX-PERF-PORT.md](docs/LINUX-PERF-PORT.md).
