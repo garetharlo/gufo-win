@@ -1102,40 +1102,59 @@ __device__ __forceinline__ void GdnRowReduce(float& u, float& p) {
   p = GdnXorAddDpp<2>(p);
 }
 
+// Two-row LDS reuse adapted from mikealanni/gufo f450218743bc (MIT).
 /// Qwen row-split recurrence specialized to the model's 128x128 state. Four
-/// lanes own one row, eight rows share a wave, and two blocks cover a head.
-/// The token loop is a short dependency chain that consumed its operands
-/// straight from global memory (the conv output is far larger than the
-/// caches), so every step paid a DRAM latency; the block now stages four
-/// tokens at a time through LDS and keeps three such windows of loads in
-/// flight, one window ahead of the one being committed.
+/// lanes own the 32-key slices of a row, eight row groups share a wave and
+/// each lane carries kRows state rows. The q/k slices of a token are read from
+/// LDS once per lane and applied to all of its rows: with one row per lane
+/// the kernel re-read the same 16 float4 for every row and saturated LDS
+/// bandwidth. Every row keeps its original per-lane summation order and
+/// DPP reduction. A block of kWaves waves covers 8 * kRows * kWaves rows of one
+/// head. The block stages four tokens at a time through LDS and keeps three
+/// such windows of loads in flight, one window ahead of the one being
+/// committed (the conv output is far larger than the caches).
 constexpr int kGdnWindow = 4;
 constexpr int kGdnWindowsAhead = 3;
-__launch_bounds__(256) __global__
+constexpr int kGdnRows = 2;   // state rows per lane
+constexpr int kGdnWaves = 4;  // waves per block
+constexpr int kGdnRowSplitRowsPerBlock = 8 * kGdnRows * kGdnWaves;
+
+__launch_bounds__(kGdnWaves * 32) __global__
     void GdnRowSplitKernel(const float* conv_out, const float* scales,
                            const float* ab, float* state, float* raw,
                            std::uint32_t n_tokens, std::uint32_t k_heads,
                            std::uint32_t v_heads) {
+  constexpr int kRows = kGdnRows;
+  constexpr int kWaves = kGdnWaves;
   constexpr int d = kGdnDim;
+  constexpr int kThreadsPerBlock = kWaves * 32;
   constexpr int kKeysPerLane = 32;
   constexpr int kVec = kKeysPerLane / 4;
   constexpr int kLanesPerRow = d / kKeysPerLane;
-  constexpr int kRowsPerWave = 32 / kLanesPerRow;
-  constexpr int kRowsPerBlock = kRowsPerWave * 8;
+  constexpr int kRowsPerWave = (32 / kLanesPerRow) * kRows;
+  constexpr int kRowsPerBlock = kRowsPerWave * kWaves;
   constexpr int kW = kGdnWindow;
-  static_assert(kW * (d / 4) * 2 == 256, "one q or k float4 per thread");
-  static_assert(kW * kRowsPerBlock == 256, "one v element per thread");
-  static_assert(kW * 5 <= 256, "scales and decays per window");
+  constexpr int kQkChunks = kW * (d / 4) * 2;  // q and k float4 per window
+  constexpr int kQkPerThread = kQkChunks / kThreadsPerBlock;
+  constexpr int kVChunks = kW * kRowsPerBlock;
+  constexpr int kVPerThread = kVChunks / kThreadsPerBlock;
+  static_assert(kQkChunks % kThreadsPerBlock == 0);
+  static_assert(kVChunks % kThreadsPerBlock == 0);
+  static_assert(kW * 5 <= kThreadsPerBlock, "scales and decays per window");
   const int h = blockIdx.y;
   const int tid = threadIdx.x;
   const int lane = tid & 31;
+  const int wave = tid >> 5;
   const int segment = lane % kLanesPerRow;
   const int row_group = lane / kLanesPerRow;
-  const int row_local = (tid >> 5) * kRowsPerWave + row_group;
-  const int row = blockIdx.x * kRowsPerBlock + row_local;
   const int kh = h % k_heads;
   const int vec0 = segment * kVec;
   const int channels = 2 * k_heads * d + v_heads * d;
+
+  // Row rr of this lane within the block.
+  const auto row_local = [&](int rr) {
+    return wave * kRowsPerWave + rr * (32 / kLanesPerRow) + row_group;
+  };
 
   // Two window slots: q and k rows, the block's v rows, the three scales
   // and two decays per token.
@@ -1143,28 +1162,49 @@ __launch_bounds__(256) __global__
   __shared__ float s_v[2][kW][kRowsPerBlock];
   __shared__ float s_misc[2][kW][5];
 
-  float* state_row = state + (static_cast<std::size_t>(h) * d + row) * d;
-  auto* state4 = reinterpret_cast<float4*>(state_row);
-  float4 s[kVec];
+  float4 s[kRows][kVec];
 #pragma unroll
-  for (int i = 0; i < kVec; ++i) {
-    s[i] = state4[vec0 + i];
+  for (int rr = 0; rr < kRows; ++rr) {
+    const int row = blockIdx.x * kRowsPerBlock + row_local(rr);
+    const auto* state4 = reinterpret_cast<const float4*>(
+        state + (static_cast<std::size_t>(h) * d + row) * d);
+#pragma unroll
+    for (int i = 0; i < kVec; ++i) {
+      s[rr][i] = state4[vec0 + i];
+    }
   }
 
-  // Window loads: thread tid takes q (tid < 128) or k float4 (tid / 32 of
-  // token (tid / 32) % kW ... laid out so a token's 128 floats are 32
-  // consecutive threads), one v element and, for tid < 5 kW, one scale.
-  const int qk_which = tid >> 7;      // 0: q, 1: k
-  const int qk_tok = (tid >> 5) & 3;  // token in the window
-  const int qk_vec = tid & 31;
-  const int v_tok = tid >> 6;
-  const int v_row = tid & 63;
+  // Window loads: chunk c of the q/k plane is (q or k, token, float4 index),
+  // laid out so a token's 128 floats are 32 consecutive chunks.
+  const float* qk_src[kQkPerThread];
+  int qk_tok[kQkPerThread];
+  int qk_which[kQkPerThread];
+  int qk_slot[kQkPerThread];
+#pragma unroll
+  for (int j = 0; j < kQkPerThread; ++j) {
+    const int c = tid + j * kThreadsPerBlock;
+    qk_which[j] = c >> 7;
+    qk_tok[j] = (c >> 5) & 3;
+    const int qk_vec = c & 31;
+    qk_src[j] =
+        conv_out + (qk_which[j] == 0 ? kh : k_heads + kh) * d + (qk_vec * 4);
+    // A token's 32 float4 are stored [i][segment] so the four segments of
+    // a row's lanes read adjacent 16-byte chunks.
+    qk_slot[j] = ((qk_vec % kVec) * kLanesPerRow) + (qk_vec / kVec);
+  }
+  const float* v_src[kVPerThread];
+  int v_tok[kVPerThread];
+  int v_row[kVPerThread];
+#pragma unroll
+  for (int j = 0; j < kVPerThread; ++j) {
+    const int e = tid + j * kThreadsPerBlock;
+    v_tok[j] = e / kRowsPerBlock;
+    v_row[j] = e % kRowsPerBlock;
+    v_src[j] = conv_out + 2 * k_heads * d + h * d + blockIdx.x * kRowsPerBlock +
+               v_row[j];
+  }
   const int m_tok = tid / 5;
   const int m_idx = tid % 5;
-  const float* qk_src =
-      conv_out + (qk_which == 0 ? kh : k_heads + kh) * d + (qk_vec * 4);
-  const float* v_src =
-      conv_out + 2 * k_heads * d + h * d + blockIdx.x * kRowsPerBlock + v_row;
   const float* m_src =
       m_idx < 3 ? scales + kh * 3 + m_idx : ab + h * 2 + (m_idx - 3);
   const std::size_t m_stride = m_idx < 3 ? k_heads * 3 : v_heads * 2;
@@ -1172,8 +1212,8 @@ __launch_bounds__(256) __global__
   // Three windows of loads in flight, as named registers (a ring array
   // lands in scratch).
   struct Window {
-    float4 qk;
-    float v;
+    float4 qk[kQkPerThread];
+    float v[kVPerThread];
     float m;
   };
   Window r0;
@@ -1181,23 +1221,31 @@ __launch_bounds__(256) __global__
   Window r2;
   const auto load_window = [&](int w, Window& r) {
     const int last = static_cast<int>(n_tokens) - 1;
-    const int t_qk = min((w * kW) + qk_tok, last);
-    const int t_v = min((w * kW) + v_tok, last);
-    r.qk = *reinterpret_cast<const float4*>(
-        qk_src + static_cast<std::size_t>(t_qk) * channels);
-    r.v = v_src[static_cast<std::size_t>(t_v) * channels];
+#pragma unroll
+    for (int j = 0; j < kQkPerThread; ++j) {
+      const int t_qk = min((w * kW) + qk_tok[j], last);
+      r.qk[j] = *reinterpret_cast<const float4*>(
+          qk_src[j] + static_cast<std::size_t>(t_qk) * channels);
+    }
+#pragma unroll
+    for (int j = 0; j < kVPerThread; ++j) {
+      const int t_v = min((w * kW) + v_tok[j], last);
+      r.v[j] = v_src[j][static_cast<std::size_t>(t_v) * channels];
+    }
     if (tid < 5 * kW) {
       const int t_m = min((w * kW) + m_tok, last);
       r.m = m_src[static_cast<std::size_t>(t_m) * m_stride];
     }
   };
-  // A token's 32 float4 are stored [i][segment] so the four segments of
-  // a row's lanes read adjacent 16-byte chunks (row-major, they were 128
-  // bytes apart: a four-way bank conflict on every fragment).
-  const int qk_slot = ((qk_vec % kVec) * kLanesPerRow) + (qk_vec / kVec);
   const auto commit_window = [&](const Window& r, int lds) {
-    s_qk[lds][qk_which][qk_tok][qk_slot] = r.qk;
-    s_v[lds][v_tok][v_row] = r.v;
+#pragma unroll
+    for (int j = 0; j < kQkPerThread; ++j) {
+      s_qk[lds][qk_which[j]][qk_tok[j]][qk_slot[j]] = r.qk[j];
+    }
+#pragma unroll
+    for (int j = 0; j < kVPerThread; ++j) {
+      s_v[lds][v_tok[j]][v_row[j]] = r.v[j];
+    }
     if (tid < 5 * kW) {
       s_misc[lds][m_tok][m_idx] = r.m;
     }
@@ -1229,37 +1277,49 @@ __launch_bounds__(256) __global__
       const float4* q4 = s_qk[lds][0][tl];
       const float4* k4 = s_qk[lds][1][tl];
       const float decay = s_misc[lds][tl][3];
-      float u = 0.0F;
-      float p = 0.0F;
+      float u[kRows] = {};
+      float p[kRows] = {};
       float4 kc[kVec];
+      // The per-token expressions are the single-row kernel's, unchanged:
+      // two rows per lane are independent scalar chains, so keeping the
+      // source form keeps the compiled arithmetic bit-identical.
 #pragma unroll
       for (int i = 0; i < kVec; ++i) {
         const float4 qv = q4[(i * kLanesPerRow) + segment];
         kc[i] = k4[(i * kLanesPerRow) + segment];
-        s[i].x *= decay;
-        s[i].y *= decay;
-        s[i].z *= decay;
-        s[i].w *= decay;
-        u += s[i].x * kc[i].x + s[i].y * kc[i].y + s[i].z * kc[i].z +
-             s[i].w * kc[i].w;
-        p += s[i].x * qv.x + s[i].y * qv.y + s[i].z * qv.z + s[i].w * qv.w;
+#pragma unroll
+        for (int rr = 0; rr < kRows; ++rr) {
+          s[rr][i].x *= decay;
+          s[rr][i].y *= decay;
+          s[rr][i].z *= decay;
+          s[rr][i].w *= decay;
+          u[rr] += s[rr][i].x * kc[i].x + s[rr][i].y * kc[i].y +
+                   s[rr][i].z * kc[i].z + s[rr][i].w * kc[i].w;
+          p[rr] += s[rr][i].x * qv.x + s[rr][i].y * qv.y + s[rr][i].z * qv.z +
+                   s[rr][i].w * qv.w;
+        }
       }
-      GdnRowReduce(u, p);
       const float inv_k = s_misc[lds][tl][0];
       const float q_scale = s_misc[lds][tl][1];
-      const float delta =
-          (s_v[lds][tl][row_local] - u * inv_k) * s_misc[lds][tl][4];
-      if (segment == 0) {
-        out_base[row] =
-            p * q_scale + delta * inv_k * q_scale * s_misc[lds][tl][2];
-      }
-      const float update = delta * inv_k;
+      const float kq = s_misc[lds][tl][2];
+      const float beta = s_misc[lds][tl][4];
 #pragma unroll
-      for (int i = 0; i < kVec; ++i) {
-        s[i].x += update * kc[i].x;
-        s[i].y += update * kc[i].y;
-        s[i].z += update * kc[i].z;
-        s[i].w += update * kc[i].w;
+      for (int rr = 0; rr < kRows; ++rr) {
+        GdnRowReduce(u[rr], p[rr]);
+        const float delta =
+            (s_v[lds][tl][row_local(rr)] - u[rr] * inv_k) * beta;
+        if (segment == 0) {
+          out_base[blockIdx.x * kRowsPerBlock + row_local(rr)] =
+              p[rr] * q_scale + delta * inv_k * q_scale * kq;
+        }
+        const float update = delta * inv_k;
+#pragma unroll
+        for (int i = 0; i < kVec; ++i) {
+          s[rr][i].x += update * kc[i].x;
+          s[rr][i].y += update * kc[i].y;
+          s[rr][i].z += update * kc[i].z;
+          s[rr][i].w += update * kc[i].w;
+        }
       }
       out_base += v_heads * d;
     }
@@ -1276,8 +1336,14 @@ __launch_bounds__(256) __global__
     window(w + 2, r2, r0);
   }
 #pragma unroll
-  for (int i = 0; i < kVec; ++i) {
-    state4[vec0 + i] = s[i];
+  for (int rr = 0; rr < kRows; ++rr) {
+    const int row = blockIdx.x * kRowsPerBlock + row_local(rr);
+    auto* state4 = reinterpret_cast<float4*>(
+        state + (static_cast<std::size_t>(h) * d + row) * d);
+#pragma unroll
+    for (int i = 0; i < kVec; ++i) {
+      state4[vec0 + i] = s[rr][i];
+    }
   }
 }
 
@@ -5827,9 +5893,10 @@ void GatedDeltaNet(const float* qkv, std::uint32_t qkv_stride, const float* z,
         dim3(Blocks(static_cast<std::size_t>(n_tokens) * v_heads)),
         dim3(kThreads), 0, stream, alpha_beta, a, dt, kn,
         static_cast<std::size_t>(n_tokens) * v_heads, v_heads);
-    hipLaunchKernelGGL(GdnRowSplitKernel, dim3(kGdnDim / 64, v_heads),
-                       dim3(kThreads), 0, stream, conv_scratch, qn, kn, state,
-                       raw, n_tokens, k_heads, v_heads);
+    hipLaunchKernelGGL(GdnRowSplitKernel,
+                       dim3(kGdnDim / kGdnRowSplitRowsPerBlock, v_heads),
+                       dim3(kGdnWaves * 32), 0, stream, conv_scratch, qn, kn,
+                       state, raw, n_tokens, k_heads, v_heads);
   } else {
     hipLaunchKernelGGL(GdnPrepKernel<false>,
                        dim3((n_tokens * k_heads + waves - 1) / waves),
