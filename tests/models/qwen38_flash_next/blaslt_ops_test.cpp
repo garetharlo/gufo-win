@@ -41,6 +41,8 @@ int main() {
     constexpr int max_n = 4096;
     for (const auto [m, k] :
          {std::pair{96, 2560}, std::pair{513, 2560}, std::pair{33, 96}}) {
+      // Prepare before the inputs exist, then reuse the plan in Gemm.
+      Require(warmed->Prepare(HIP_R_16F, m, max_n, k, &error), error);
       std::vector<__half> weights(static_cast<std::size_t>(m) * k);
       std::vector<__half> input(static_cast<std::size_t>(max_n) * k);
       unsigned rng = 123;

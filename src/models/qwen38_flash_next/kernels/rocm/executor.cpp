@@ -1,4 +1,4 @@
-#include "src/models/qwen38_flash_next/kernels/rocm/executor.hpp"
+﻿#include "src/models/qwen38_flash_next/kernels/rocm/executor.hpp"
 
 #include <algorithm>
 #include <array>
@@ -388,6 +388,25 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   if (e->blaslt_ == nullptr) {
     return nullptr;
   }
+  if (MatrixRows(static_cast<std::uint32_t>(T))) {
+    // The first indexer heuristic query also loads the library's code object.
+    // Do that before readiness instead of leaving a ~100 ms GPU idle gap in
+    // the first prefill. Exact geometry still determines every plan; no trial
+    // GEMM runs and no model activations or session state are touched.
+    for (const auto& layer : model.layers()) {
+      for (const auto* tensor : {&layer.indexer_k, &layer.indexer_q}) {
+        if (!tensor->empty() &&
+            (tensor->type == GgmlType::kBF16 ||
+             tensor->type == GgmlType::kF16) &&
+            !e->blaslt_->Prepare(
+                tensor->type == GgmlType::kBF16 ? HIP_R_16BF : HIP_R_16F,
+                static_cast<int>(tensor->rows), static_cast<int>(T),
+                static_cast<int>(tensor->cols), error_msg)) {
+          return nullptr;
+        }
+      }
+    }
+  }
   const std::size_t hc_dim = c.HcDim();
   const std::size_t hidden = c.hidden_size;
   const std::size_t slots = T * c.num_experts_used;
@@ -437,8 +456,13 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
       (c.context_length + c.compress_ratio - 1) / c.compress_ratio;
   e->mask_words_ = (max_blocks + 31) / 32;
   s.mask = Alloc<std::uint32_t>(a, T * e->mask_words_, error_msg);
-  s.scores =
-      f32(static_cast<std::size_t>(e->select_chunk_) * e->mask_words_ * 32);
+  // Keep score/selection traffic near the device cache size. Captured
+  // verification still needs all its rows at the maximum context.
+  const std::size_t score_stride = std::size_t{e->mask_words_} * 32;
+  e->select_score_floats_ =
+      std::max(kVecBatch * score_stride,
+               std::min(std::size_t{5 * 1024 * 1024}, 512 * score_stride));
+  s.scores = f32(e->select_score_floats_);
   s.ctx = f32(T * c.AttentionQDim());
   s.attn_partials = f32(static_cast<std::size_t>(kVecBatch) * c.num_heads *
                         kAttnSplits * (c.head_dim + 2));
@@ -1230,7 +1254,7 @@ void Executor::Combine(float* res, const float* gamma,
     // The MoE epilogue was deferred to this combine (see Moe).
     moe_pending_ = false;
     const auto* down = reinterpret_cast<const __half*>(s_.down_e);
-    if (xn_half_ &&
+    if (wide_mixer_ && MatrixRows(n_tokens) &&
         HcCombineMoeF16(res, down, s_.weights, s_.shexp_out,
                         s_.router + c.num_experts, c.num_experts + 1,
                         c.num_experts_used, s_.inject, inject_parts_, gamma,
@@ -1689,33 +1713,45 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
                       index_capacity, stream_, s.rope);
     // Align score rows to full cache lines. The selector still considers
     // only complete causal blocks, so padding cannot change the ranking.
+    // Wide prefill is never captured: compact score rows to the populated
+    // context. Graphs retain the maximum stride for replay at later positions.
+    const auto score_context =
+        n_tokens > kVecBatch ? start_pos + n_tokens : max_context;
     const std::uint32_t blocks =
-        (max_context + c.compress_ratio - 1) / c.compress_ratio;
+        (score_context + c.compress_ratio - 1) / c.compress_ratio;
     const std::uint32_t max_blocks = (blocks + 31) / 32 * 32;
+    const auto select_chunk = static_cast<std::uint32_t>(std::min(
+        std::size_t{512}, std::bit_floor(select_score_floats_ / max_blocks)));
     // Catch-up consumes only the final attention tile. Keep all its query
     // masks (sparse attention packs four queries; dense tiles hold sixteen)
     // but avoid scoring the unused prefix against the complete context.
     const auto first_query = last_only ? (n_tokens - 1) / 16 * 16 : 0U;
-    for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk_) {
-      const std::uint32_t n = std::min(select_chunk_, n_tokens - t0);
+    for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk) {
+      const std::uint32_t n = std::min(select_chunk, n_tokens - t0);
+      // Batches wider than kVecBatch are never captured, so the host
+      // position bounds the scored range (a replayed graph must cover
+      // max_blocks).
+      const std::uint32_t live =
+          n_tokens > kVecBatch ? (start_pos + t0 + n) / c.compress_ratio : 0;
       SelectBlocks(s_.iq + static_cast<std::size_t>(t0) * c.indexer_heads *
                                c.indexer_head_dim,
                    s.block_k,
                    s_.mask + static_cast<std::size_t>(t0) * mask_words_,
                    s_.scores, n, pos, t0, c.indexer_heads, c.indexer_head_dim,
                    c.compress_ratio, c.indexer_top_k / c.compress_ratio,
-                   mask_words_, max_blocks, stream_);
+                   mask_words_, max_blocks, stream_, live);
     }
     mask = s_.mask;
   }
   // Wide batches run the fused WMMA kernel (never inside a graph: the kv
   // extent is a host value), output gate included, skipping the key tiles
   // no query of a block selected; the per-token kernel covers the rest.
-  if (last_only && !Check(hipMemsetAsync(s_.ctx, 0,
-                                         static_cast<std::size_t>(n_tokens) *
-                                             c.AttentionQDim() * sizeof(float),
-                                         stream_),
-                          "draft attention output initialization", error_msg)) {
+  if (last_only &&
+      !Check(hipMemsetAsync(s_.ctx, 0,
+                            static_cast<std::size_t>(n_tokens) *
+                                c.AttentionQDim() * sizeof(float),
+                            stream_),
+             "partial attention output initialization", error_msg)) {
     return false;
   }
   if (MatrixRows(n_tokens) &&
@@ -2262,6 +2298,11 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     if (!HcMix(l.hc_attn, s_.res, normed, s_.mixed, s_.inject, n, error_msg)) {
       return false;
     }
+    // The last target layer's query outputs have no later cache consumer.
+    // Preserve all K/V/indexer rows and the final query's original tile.
+    const bool last_attention = prefill_phase && !session.mtp_enabled_ &&
+                                il + 1 == c.num_layers && n >= 1024 &&
+                                n_logits == 1;
     if (l.linear) {
       if (!LinearAttention(l, session.linear_[il], s_.mixed, s_.block_out, n,
                            speculative, error_msg)) {
@@ -2270,23 +2311,48 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     } else if (!Attention(l, session.attention_[il], s_.mixed, s_.block_out, n,
                           &session.control_->position,
                           &session.control_->blocks, start_pos, pool_grid,
-                          session.max_context_, sparse, error_msg)) {
+                          session.max_context_, sparse, error_msg,
+                          last_attention, false, true)) {
       return false;
     }
 
-    // Each combine also norms the residual for the mixer that follows it,
-    // unless PLE rewrites the residual first.
-    Combine(s_.res, l.hc_ffn.norm.f32(), n);
-    if (!HcMix(l.hc_ffn, s_.res, true, s_.mixed, s_.inject, n, error_msg) ||
-        !Moe(l, s_.mixed, s_.block_out, n, error_msg)) {
-      return false;
-    }
     const float* next_norm =
         il + 1 < c.num_layers
             ? (c.IsPleLayer(il + 1) ? nullptr
                                     : layers[il + 1].hc_attn.norm.f32())
-            : model_->hc_head().norm.f32();
-    Combine(s_.res, next_norm, n);
+            : nullptr;
+    // Cache updates precede the FFN. Without MTP, only requested head rows
+    // and the checkpoint frontier consume the final layer's residual.
+    // Keep aligned tiles and at least 96 rows to retain the wide arithmetic.
+    const auto needed = std::max({96U, n_logits});
+    const auto skipped = prefill_phase && !session.mtp_enabled_ &&
+                                 il + 1 == c.num_layers && n > needed
+                             ? (n - needed) / 128 * 128
+                             : 0U;
+    const auto finish = [&](std::uint32_t rows) {
+      Combine(s_.res, l.hc_ffn.norm.f32(), rows);
+      if (!HcMix(l.hc_ffn, s_.res, true, s_.mixed, s_.inject, rows,
+                 error_msg) ||
+          !Moe(l, s_.mixed, s_.block_out, rows, error_msg))
+        return false;
+      Combine(s_.res, next_norm, rows);
+      return true;
+    };
+    if (skipped != 0) {
+      struct RestoreScratch {
+        const Executor* executor;
+        Scratch scratch;
+        ~RestoreScratch() { executor->UseScratch(scratch); }
+      } restore{this, s_};
+      auto tail = RowScratch(s_, skipped);
+      tail.inject =
+          s_.inject + std::size_t{skipped} * c.hc_count * inject_parts_;
+      UseScratch(tail);
+      if (!finish(n - skipped))
+        return false;
+    } else if (!finish(n)) {
+      return false;
+    }
     normed = next_norm != nullptr;
   }
   if (end_layer < c.num_layers) {
