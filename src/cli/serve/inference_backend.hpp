@@ -120,12 +120,17 @@ public:
   /// Stable model identifier used in API responses.
   [[nodiscard]] std::string model_id() const override;
   [[nodiscard]] bool ready() const override;
-  [[nodiscard]] SamplingDefaults sampling_defaults() const override;
+  [[nodiscard]] bool device_lost() const override;
+  [[nodiscard]] bool supports_images() const override;
+  [[nodiscard]] std::string model_path() const override;
+  [[nodiscard]] std::string build_info() const override;  [[nodiscard]] SamplingDefaults sampling_defaults() const override;
   [[nodiscard]] std::uint32_t max_context() const;
   [[nodiscard]] ReasoningOptions reasoning_defaults() const override;
   [[nodiscard]] InitialOutputState initial_output_state(
       const ChatRequest& request) const override;
   void set_model_id(const std::string& model_id);
+  void set_served_artifact(const std::string& model_path,
+                           const std::string& build_info);
   void set_sampling_defaults(std::size_t max_tokens,
                              const sampling::SamplingConfig& sampling);
   void set_reasoning_defaults(const ReasoningOptions& reasoning);
