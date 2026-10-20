@@ -1,4 +1,4 @@
-#include "src/cli/serve/http_server.hpp"
+﻿#include "src/cli/serve/http_server.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -526,8 +526,8 @@ void TestInvalidBindSettings() {
 
 void TestCompatibilityUtf8() {
   RunningServer server;
-  server.backend->SetOutput("é中😀\xE2\x94!\xF0\x9F");
-  const std::string expected = "é中😀\xEF\xBF\xBD!\xEF\xBF\xBD";
+  server.backend->SetOutput("Ã©ä¸­ðŸ˜€\xE2\x94!\xF0\x9F");
+  const std::string expected = "Ã©ä¸­ðŸ˜€\xEF\xBF\xBD!\xEF\xBF\xBD";
   for (const auto& [path, input] : {
            std::pair{"/v1/completions", R"({"prompt":"hi"})"},
            std::pair{"/v1/responses", R"({"input":"hi"})"},

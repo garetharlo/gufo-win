@@ -211,6 +211,18 @@ public:
 
   [[nodiscard]] virtual std::string model_id() const = 0;
   [[nodiscard]] virtual bool ready() const = 0;
+  /// True once a failed generation showed that the execution device can no
+  /// longer run work, for example after a GPU reset. The loss is permanent.
+  [[nodiscard]] virtual bool device_lost() const { return false; }
+  /// Maximum tokens accepted by the loaded model under the configured context.
+  /// Zero when no text model is loaded.
+  [[nodiscard]] virtual std::uint32_t max_context() const { return 0; }
+  /// Whether the loaded backend accepts image inputs in chat requests.
+  [[nodiscard]] virtual bool supports_images() const { return false; }
+  /// The served model file and build revision, as llama-server's /props
+  /// reports them. Empty when unknown.
+  [[nodiscard]] virtual std::string model_path() const { return {}; }
+  [[nodiscard]] virtual std::string build_info() const { return {}; }
   [[nodiscard]] virtual SamplingDefaults sampling_defaults() const {
     return {};
   }
