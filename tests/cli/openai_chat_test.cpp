@@ -469,6 +469,49 @@ void TestToolCallsAreStructured() {
          "Required tool choice reaches the model backend");
 }
 
+void TestParallelCallSeparatorIsNotContent() {
+  FakeBackend backend;
+  backend.pieces = {
+      "<tool_call>\n<function=get_weather>\n<parameter=city>\nRome\n"
+      "</parameter>\n</function>\n</tool_call>\n\n"
+      "<tool_call>\n<function=get_weather>\n<parameter=city>\nMilan\n"
+      "</parameter>\n</function>\n</tool_call>\n",
+  };
+
+  const auto response = gufo::server::HandleOpenAiChat(Request(R"({
+        "model":"test-model",
+        "messages":[{"role":"user","content":"weather in Rome and Milan"}],
+        "tools":[{
+          "type":"function",
+          "function":{
+            "name":"get_weather",
+            "description":"Get weather",
+            "parameters":{
+              "type":"object",
+              "properties":{"city":{"type":"string"}},
+              "required":["city"]
+            }
+          }
+        }],
+        "tool_choice":"auto",
+        "stream":false
+      })"),
+                                                       backend);
+
+  const auto body = gufo::json::parse(response.body);
+  const auto* choices = body.find("choices");
+  const auto* message =
+      choices && !choices->items().empty()
+          ? choices->items()[0].find("message") : nullptr;
+  const auto* content = message ? message->find("content") : nullptr;
+  Expect(content != nullptr,
+         "Parallel-call response carries a content field");
+  Expect(content && (content->is_null() || content->is_string()) &&
+             (!content || !content->is_string() ||
+              content->as_string().empty()),
+         "Whitespace between parallel tool calls is not reported as content");
+}
+
 void TestToolParameterCompatibility() {
   using gufo::json::Value;
   const std::pair<const char*, const char*> cases[] = {
@@ -1781,6 +1824,7 @@ int main() {
   TestStreamingPromptOpenedReasoning();
   TestConflictingReasoningControlsAreRejected();
   TestToolCallsAreStructured();
+  TestParallelCallSeparatorIsNotContent();
   TestToolParameterCompatibility();
   TestInvalidToolsFailBeforeGeneration();
   TestToolNameCharacters();
