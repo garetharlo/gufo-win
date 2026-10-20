@@ -4909,6 +4909,8 @@ __launch_bounds__(256) __global__
 __global__ void RoutedPadBoundsKernel(const std::uint32_t* __restrict__ counts,
                                       std::int32_t* __restrict__ pad_bounds,
                                       std::int32_t* __restrict__ cursors,
+                                      std::int32_t* __restrict__ rows_token,
+                                      std::int32_t* __restrict__ rows_slot,
                                       std::uint32_t n_experts) {
   __shared__ std::int32_t padded[1024];
   for (std::uint32_t e = threadIdx.x; e < n_experts; e += blockDim.x) {
@@ -4923,6 +4925,17 @@ __global__ void RoutedPadBoundsKernel(const std::uint32_t* __restrict__ counts,
       running += padded[e];
     }
     pad_bounds[n_experts] = running;
+  }
+  __syncthreads();
+  // Scatter overwrites every occupied row. Only the padding can retain a
+  // previous batch's assignments; clear it while the bucket bounds are hot.
+  for (std::uint32_t e = threadIdx.x; e < n_experts; e += blockDim.x) {
+    for (std::uint32_t row = counts[e];
+         row < static_cast<std::uint32_t>(padded[e]); ++row) {
+      const auto at = pad_bounds[e] + row;
+      rows_token[at] = -1;
+      rows_slot[at] = -1;
+    }
   }
 }
 
@@ -5292,11 +5305,9 @@ void RoutedCompact(const std::int32_t* ids, const std::uint32_t* counts,
                    std::uint32_t n_tokens, std::uint32_t k,
                    std::uint32_t n_experts, hipStream_t stream) {
   const std::size_t slots = static_cast<std::size_t>(n_tokens) * k;
-  const std::size_t rows = RoutedCompactRows(slots, n_experts);
-  (void)hipMemsetAsync(rows_token, 0xFF, rows * sizeof(std::int32_t), stream);
-  (void)hipMemsetAsync(rows_slot, 0xFF, rows * sizeof(std::int32_t), stream);
   hipLaunchKernelGGL(RoutedPadBoundsKernel, dim3(1), dim3(1024), 0, stream,
-                     counts, pad_bounds, cursors, n_experts);
+                     counts, pad_bounds, cursors, rows_token, rows_slot,
+                     n_experts);
   hipLaunchKernelGGL(RoutedScatterKernel, dim3(Blocks(slots)), dim3(kThreads),
                      0, stream, ids, pad_bounds, cursors, rows_token, rows_slot,
                      static_cast<std::uint32_t>(slots), k);
