@@ -931,6 +931,16 @@ tests/cli/openai_chat_test.cpp using the fork's FakeBackend harness
 parallel `get_weather` Rome+Milan with `tool_choice=required` returns two
 `tool_calls` and `content: null`.
 
+### [x] #681 — vector-load small projection path for F16/BF16 weights
+
+Upstream: `ae9ec69`, ported 2026-10-20. `SmallGemmKernel` whole-pass rows now
+use 8-byte `ushort4` loads for F16/BF16 (widened like `RowElement`) instead of
+scalar reads; `LaunchSmallGemm` routes all non-Q8_0 types through the fast
+path. Applies cleanly to `kernels.hip.cpp`. Verified: greedy haiku
+byte-identical; interleaved A/B (`pp2048,24576 -n 128 -d 0,32768 -r 2` ×2
+each): tg128@d32768 +3% (27.33/27.05 vs 26.35/26.31 both orders), prefill
+within noise.
+
 ### [x] #609 — load DeepSeek V4 Flash when weights exceed the device pool
 
 Upstream: `a7ca5f0`, ported 2026-10-20. Weights now go through
