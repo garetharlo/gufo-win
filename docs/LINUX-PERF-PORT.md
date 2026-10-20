@@ -883,11 +883,20 @@ sampled (t 0.8, seed 42) all byte-identical to the pre-port baseline;
 penalized greedy now stays on the GPU argmax path. Perf not re-benched
 (upstream win applies to penalty-configured greedy serving).
 
-### [ ] #348 — skip disk checkpoints that barely advance a prefix
+### [x] #348 — skip disk checkpoints that barely advance a prefix
 
-Upstream: `93af45d`. Fewer disk writes/fsyncs on multi-turn chats. No
-decode/prefill gain. Trade-off: disk-only restore re-prefills up to 2,048
-tokens. Do it only if the disk cache is a measured bottleneck.
+Upstream: `93af45d`, ported 2026-10-20. Fewer disk writes/fsyncs on
+multi-turn chats. No decode/prefill gain. Trade-off: disk-only restore
+re-prefills up to 2,048 tokens. Do it only if the disk cache is a measured
+bottleneck.
+
+Ported anyway (cheap, pure win for chat serving): `min_checkpoint_step_tokens`
+(default 2048) in `ContinuationDiskStoreOptions`, `WithinCheckpointStep`
+preflight skips the device-state copy when the store would discard the result,
+`reason=min_step` logged at Info. Dropped the shared-prefix/persistence
+`SaveAsync` overload (upstream API not in fork). Verified: 3-turn chat with
+`--cache-disk` — turn 1 stores (write_ms=4316), turns 2–3 skip with
+`action=skipped reason=min_step`.
 
 ### [x] #499 — stage Qwen-Image weight uploads through pinned buffers
 
