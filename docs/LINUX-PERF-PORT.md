@@ -711,7 +711,7 @@ timing digits differ); pp4096 1544→1663 (+5–7% across 2 interleaved rounds),
 pp24576 1429→1528 (+6.4%), pp65536 1395→1490 (+6.6%); tg64 @ d32768
 26.45→26.58 (noise). Matches upstream's claimed 6–11% for 24K+ prompts.
 
-### [~] #571 — faster wide prefill kernels
+### [x] #571 - faster wide prefill kernels
 
 Upstream: `a33e989`. pp2048 **1826 → 1853 tok/s**; HTTP AR pp d0
 **1708 → 1774**, d32K **1536 → 1649**; pp2051 **1795 → 1815**; byte-identical
