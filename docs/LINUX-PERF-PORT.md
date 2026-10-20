@@ -956,6 +956,19 @@ interleaved A/B neutral (the win is disk-cache overlap under `--cache-disk`
 serving, not plain bench). Metrics appear as `ngram_rows=`/`ngram_dedup_rows=`/
 `ngram_cache_hits=`/`ngram_disk_reads=` in generation details.
 
+### [x] #686 — answer `Expect: 100-continue` before reading the body
+
+Upstream: `f020bd3`, ported 2026-10-20. `HttpServer::handle_connection` now
+sends `HTTP/1.1 100 Continue` when an HTTP/1.1 request carries
+`Expect: 100-continue` and the body is still unread, instead of leaving the
+client to stall until its timeout (curl sends it for bodies over 1 MiB). Also
+adds upstream's `TestExpectContinue` to `tests/cli/http_server_test.cpp`.
+Verified live on the served Qwen3.8-Flash-Next endpoint with a raw socket
+POST: fixed build returns the interim `100 Continue` before any body byte;
+the previous binary sends nothing until the body arrives (client read times
+out). The added test could not be built here (`cpu-test` configure needs ICU,
+Linux/Nix only).
+
 ### [x] #609 — load DeepSeek V4 Flash when weights exceed the device pool
 
 Upstream: `a7ca5f0`, ported 2026-10-20. Weights now go through
