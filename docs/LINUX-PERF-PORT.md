@@ -969,6 +969,16 @@ the previous binary sends nothing until the body arrives (client read times
 out). The added test could not be built here (`cpu-test` configure needs ICU,
 Linux/Nix only).
 
+### [-] #680 — avoid repeated resets and full checkpoint lookups
+
+Upstream: `887c38a`, not ported. It optimizes upstream's tiered cache
+(`src/cache/prefix_index.*` ~325 KB plus `component_text_cache.cpp` ~73 KB),
+which this fork does not have: the fork's cache is a single 41 KB
+`src/cli/serve/continuation_cache.cpp` with a different restore/lease model.
+There is no `HasCheckpoint`/`Acquire` structure to patch and the change does
+not translate into fork-local code, so it is a cache-architecture port rather
+than a patch — same disposition as #652.
+
 ### [x] #609 — load DeepSeek V4 Flash when weights exceed the device pool
 
 Upstream: `a7ca5f0`, ported 2026-10-20. Weights now go through
