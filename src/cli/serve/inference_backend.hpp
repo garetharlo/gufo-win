@@ -123,8 +123,9 @@ public:
   [[nodiscard]] bool device_lost() const override;
   [[nodiscard]] bool supports_images() const override;
   [[nodiscard]] std::string model_path() const override;
-  [[nodiscard]] std::string build_info() const override;  [[nodiscard]] SamplingDefaults sampling_defaults() const override;
-  [[nodiscard]] std::uint32_t max_context() const;
+  [[nodiscard]] std::string build_info() const override;
+  [[nodiscard]] SamplingDefaults sampling_defaults() const override;
+  [[nodiscard]] std::uint32_t max_context() const override;
   [[nodiscard]] ReasoningOptions reasoning_defaults() const override;
   [[nodiscard]] InitialOutputState initial_output_state(
       const ChatRequest& request) const override;

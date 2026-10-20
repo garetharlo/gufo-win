@@ -29,6 +29,7 @@
 #include "src/core/sampling.hpp"
 #include "src/models/qwen/chat_template.hpp"
 #include "src/models/qwen/generator.hpp"
+#include "src/models/qwen/vision/image_cache.hpp"
 
 #if defined(ENGINE_ENABLE_HIP)
 #include "src/core/platform/device_memory.hpp"
@@ -76,7 +77,7 @@ tokenization::ChatTemplateOptions QwenChatOptions(const ChatRequest& request,
 TextPreparedPrompt PrepareQwenPrompt(
     const ChatRequest& request, const tokenization::QwenTokenizer& tokenizer,
     const std::shared_ptr<models::qwen::vision::Encoder>& encoder,
-    std::uint32_t max_context) {
+    std::uint32_t max_context, models::qwen::vision::ImageCache& image_cache) {
   const bool has_images = std::ranges::any_of(
       request.messages, [](const auto& m) { return !m.images.empty(); });
   const auto options = QwenChatOptions(request, max_context);
@@ -88,7 +89,14 @@ TextPreparedPrompt PrepareQwenPrompt(
               : std::span<const tokenization::ChatTool>{request.tools},
           options,
           encoder && has_images ? encoder->identity() : std::string_view{},
-          max_context));
+          max_context, request.cache_prompt ? &image_cache : nullptr));
+  if (has_images) {
+    // fork has no Logger::LogFormatted; one line per image request is enough.
+    const auto stats = image_cache.GetStats();
+    Logger::Info("vision", "event=image_cache hits=" + std::to_string(stats.hits) +
+                               " misses=" + std::to_string(stats.misses) +
+                               " entries=" + std::to_string(stats.entries));
+  }
   const auto cache_prefix = prompt->stable_prefix_tokens;
   if (prompt->images.empty())
     return {std::move(prompt->tokens), {}, cache_prefix};
@@ -904,7 +912,8 @@ public:
   [[nodiscard]] std::optional<TextPreparedPrompt> PreparePrompt(
       const ChatRequest& request) const override {
     return PrepareQwenPrompt(request, model_->GetTokenizer(),
-                             model_->VisionEncoder(), max_context_);
+                             model_->VisionEncoder(), max_context_,
+                             image_cache_);
   }
 
   void SetPromptContext(
@@ -1388,6 +1397,7 @@ private:
     return std::clamp<std::size_t>(max_context_ / rows_per_session, 1, 8);
   }
 
+  mutable models::qwen::vision::ImageCache image_cache_;
   std::shared_ptr<const hip::QwenGpuModel> model_;
   std::shared_ptr<const hip::QwenDFlashGpuModel> dflash_model_;
   std::uint32_t max_context_;
@@ -2369,7 +2379,8 @@ public:
   [[nodiscard]] std::optional<TextPreparedPrompt> PreparePrompt(
       const ChatRequest& request) const override {
     return PrepareQwenPrompt(request, model_->tokenizer(),
-                             model_->VisionEncoder(), max_context_);
+                             model_->VisionEncoder(), max_context_,
+                             image_cache_);
   }
 
   void SetPromptContext(
@@ -2726,6 +2737,7 @@ public:
   }
 
 private:
+  mutable models::qwen::vision::ImageCache image_cache_;
   std::shared_ptr<QwenFlashNextModel> model_;
   std::uint32_t max_context_;
   bool use_mtp_;
