@@ -931,6 +931,16 @@ tests/cli/openai_chat_test.cpp using the fork's FakeBackend harness
 parallel `get_weather` Rome+Milan with `tool_choice=required` returns two
 `tool_calls` and `content: null`.
 
+### [x] #609 — load DeepSeek V4 Flash when weights exceed the device pool
+
+Upstream: `a7ca5f0`, ported 2026-10-20. Weights now go through
+`gufo::hip::WeightAllocator` (new header-only `src/core/hip/heap_placement.hpp`
++ `src/core/hip/managed_alloc.hpp`, verbatim from upstream): placement is
+decided once from the registered weight size vs. the device heap with a
+4 GiB dispatch reserve; oversized weights go wholly to coarse-grain managed
+memory so per-session device scratch keeps the heap. Code-only port — no
+DSpark weights on this host to behavior-gate; CI-gated like #668.
+
 ### [x] #499 — stage Qwen-Image weight uploads through pinned buffers
 
 Upstream: `eb91daa`. Local `qwen_image_21/weights.cpp` uses `mmap`; staging
