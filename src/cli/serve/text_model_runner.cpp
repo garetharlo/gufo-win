@@ -562,6 +562,7 @@ struct TextRunnerPool::Request::Impl {
           state,
           std::span<const TextRunnerToken>(prompt).first(prefill_offset));
     }
+    ngram_baseline = runner->NgramRows(state);
   }
 
   ~Impl() {
@@ -804,6 +805,8 @@ struct TextRunnerPool::Request::Impl {
   std::vector<TextRunnerToken> generated;
   std::size_t prefill_offset{0};
   bool decode_ready{false};
+  /// The leased state's cumulative n-gram rows before this request ran.
+  TextRunnerNgramRows ngram_baseline;
   // A throwing model call may have partially mutated device state. Never
   // publish that state as a live continuation, even if its position is stale.
   bool state_reusable{true};
@@ -881,6 +884,17 @@ std::size_t TextRunnerPool::Request::cached_prompt_tokens() const noexcept {
 
 std::size_t TextRunnerPool::Request::prefill_position() const noexcept {
   return impl_ != nullptr ? impl_->prefill_offset : 0;
+}
+
+TextRunnerNgramRows TextRunnerPool::Request::ngram_rows() const noexcept {
+  if (impl_ == nullptr)
+    return {};
+  const auto now = impl_->runner->NgramRows(
+      dynamic_cast<const TextRunnerState&>(impl_->lease.state()));
+  const auto& base = impl_->ngram_baseline;
+  return {now.rows - base.rows, now.dedup_rows - base.dedup_rows,
+          now.cache_hits - base.cache_hits,
+          now.disk_reads - base.disk_reads};
 }
 
 ContinuationLookup TextRunnerPool::Request::cache_lookup() const noexcept {
@@ -961,6 +975,24 @@ TextPrefillStep TextRunnerPool::Request::Prefill(std::size_t max_input_tokens) {
                                 .first(impl_->prefill_offset < snapshot_position
                                            ? snapshot_position
                                            : impl_->prompt.size());
+  // Keep reading n-gram rows one checkpoint ahead of the frontier so long
+  // prefills overlap disk reads with compute.
+  auto& lookahead_state = dynamic_cast<TextRunnerState&>(impl_->lease.state());
+  const std::size_t frontier = impl_->prefill_offset;
+  std::size_t lookahead_end = impl_->prompt.size();
+  for (const auto point : impl_->boundaries) {
+    if (point > frontier)
+      lookahead_end = std::min(lookahead_end, point);
+  }
+  if (snapshot_position > frontier)
+    lookahead_end = std::min(lookahead_end, snapshot_position);
+  struct ClearLookahead {
+    TextRunnerState& state;
+    ~ClearLookahead() { state.SetPrefillLookahead({}); }
+  } clear_lookahead{lookahead_state};
+  lookahead_state.SetPrefillLookahead(
+      std::span<const TextRunnerToken>(impl_->prompt)
+          .subspan(frontier, lookahead_end - frontier));
   auto step = impl_->runner->Prefill(
       dynamic_cast<TextRunnerState&>(impl_->lease.state()), model_prompt,
       impl_->prefill_offset, max_input_tokens);

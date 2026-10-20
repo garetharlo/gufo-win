@@ -941,6 +941,21 @@ byte-identical; interleaved A/B (`pp2048,24576 -n 128 -d 0,32768 -r 2` ×2
 each): tg128@d32768 +3% (27.33/27.05 vs 26.35/26.31 both orders), prefill
 within noise.
 
+### [x] #683 — prefetch n-gram rows across cache checkpoints
+
+Upstream: `62c840e`, ported 2026-10-20. `NgramTable::StartRead` gained a flat
+open-addressed dedup table (`first_rows_`, at most half full) plus per-sequence
+`NgramCounters` (`rows == dedup_rows + cache_hits + disk_reads`); `Request::Prefill`
+publishes a `prefill_lookahead` span (next chunk or snapshot boundary) so the
+engine gathers n-gram rows for the *next* chunk while the current one runs, and
+the QwenFlashNext runner passes that span as `Sync`'s next-chunk hint. The serve
+layer was hand-ported (3 files diverged); dropped upstream's `OwnsSnapshot`
+(fork has no `SnapshotState`). Verified: `--validate-prefill 64` rmse 0.28 /
+cosine 1.00 / max 1.30; greedy haiku byte-identical vs `6747b64` base;
+interleaved A/B neutral (the win is disk-cache overlap under `--cache-disk`
+serving, not plain bench). Metrics appear as `ngram_rows=`/`ngram_dedup_rows=`/
+`ngram_cache_hits=`/`ngram_disk_reads=` in generation details.
+
 ### [x] #609 — load DeepSeek V4 Flash when weights exceed the device pool
 
 Upstream: `a7ca5f0`, ported 2026-10-20. Weights now go through

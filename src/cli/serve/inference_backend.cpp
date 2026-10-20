@@ -2437,15 +2437,20 @@ public:
         {max_input_tokens, prompt.size() - offset, model_->PrefillCapacity()});
     const std::size_t next_position = offset + consumed;
     const auto prefix = QwenFlashNextEngineTokens(prompt.first(next_position));
-    // The next step most likely takes the same budget; its n-gram rows are
-    // read during this one and used only if it does.
     const std::size_t after = prompt.size() - next_position;
     const auto next = QwenFlashNextEngineTokens(prompt.subspan(
         next_position,
         std::min<std::size_t>(
             {max_input_tokens, after, model_->PrefillCapacity()})));
+    // Read inputs for tokens past this chunk while it runs; the next call
+    // most likely consumes exactly this span.
+    const auto lookahead = state.prefill_lookahead();
+    const auto next_span =
+        !lookahead.empty() && lookahead.front() == prompt[next_position]
+            ? QwenFlashNextEngineTokens(lookahead)
+            : next;
     std::string error;
-    if (!qfn.session().Sync(prefix, &error, next)) {
+    if (!qfn.session().Sync(prefix, &error, next_span)) {
       qfn.set_position(0);
       throw std::runtime_error("Qwen3.8-Flash-Next prefill failed: " + error);
     }
@@ -2454,6 +2459,14 @@ public:
         .consumed_tokens = consumed,
         .decode_ready = next_position == prompt.size(),
     };
+  }
+
+  [[nodiscard]] TextRunnerNgramRows NgramRows(
+      const TextRunnerState& state) const override {
+    const auto totals =
+        RequireQwenFlashNextState(state).session().NgramRowTotals();
+    return {totals.rows, totals.dedup_rows, totals.cache_hits,
+            totals.disk_reads};
   }
 
   [[nodiscard]] TextDecodeSelection SelectNext(

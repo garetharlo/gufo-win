@@ -140,6 +140,13 @@ struct TextPrefillStep {
   bool decode_ready{false};
 };
 
+struct TextRunnerNgramRows {
+  std::uint64_t rows{0};
+  std::uint64_t dedup_rows{0};
+  std::uint64_t cache_hits{0};
+  std::uint64_t disk_reads{0};
+};
+
 struct TextDecodeSelection {
   bool stop{false};
   TextRunnerToken token{0};
@@ -175,6 +182,20 @@ public:
       const noexcept {
     return {};
   }
+
+  /// Prompt tokens past the next Prefill's frontier, up to the frontier
+  /// planned after it. A runner may read their inputs ahead during that call
+  /// but never consumes them. Empty outside a prefill step.
+  void SetPrefillLookahead(std::span<const TextRunnerToken> tokens) noexcept {
+    prefill_lookahead_ = tokens;
+  }
+  [[nodiscard]] std::span<const TextRunnerToken> prefill_lookahead()
+      const noexcept {
+    return prefill_lookahead_;
+  }
+
+private:
+  std::span<const TextRunnerToken> prefill_lookahead_;
 };
 
 /// Immutable model-owned continuation payload.
@@ -279,6 +300,12 @@ public:
   virtual void PrepareBatchExecution(TextRunnerState& state) const {
     (void)state;
   }
+  /// Cumulative n-gram table rows owned by this runner's model.
+  [[nodiscard]] virtual TextRunnerNgramRows NgramRows(
+      const TextRunnerState& state) const {
+    (void)state;
+    return {};
+  }
   /// Processes at most max_input_tokens, yielding after one model-owned
   /// chunk even when the scheduler grants the whole remaining prompt.
   [[nodiscard]] virtual TextPrefillStep Prefill(
@@ -376,6 +403,8 @@ public:
     [[nodiscard]] std::size_t prompt_tokens() const noexcept;
     /// Prompt tokens already in model state, restored or prefilled.
     [[nodiscard]] std::size_t prefill_position() const noexcept;
+    /// N-gram rows read for this request, minus any restored baseline.
+    [[nodiscard]] TextRunnerNgramRows ngram_rows() const noexcept;
     [[nodiscard]] bool prefill_complete() const noexcept;
 
     void PrepareBatchExecution();
