@@ -461,9 +461,17 @@ stack, so checkpoint code is dropped from every slice.
 - [x] **GDN row reuse** in `GdnRowSplitKernel`: two rows per lane, four waves,
   128 threads per block, shared `q`/`k` loads reused across the row pair.
 - [ ] Padded SSM F16 rows (`half_stride`, `DenseF16Gemm` `kStrided`).
-- [ ] Full selector scratch (`select_chunk` without `bit_floor`,
+- [ ] ~~Full selector scratch (`select_chunk` without `bit_floor`,
   `first_query = n_tokens - 16` for `last_only`), packed `SelectScore` half2
-  loads and `sched_barrier`.
+  loads and `sched_barrier`.~~ **Rejected locally (2026-10-19).** Gates passed
+  (rmse 0.39 / cosine 0.99 / max 1.88; haiku + 1,951-token greedy identical),
+  but interleaved A/B vs baseline (`-p 2048 -n 16 -d 0,32768,131072 -r 2`)
+  showed a large prefill-at-depth regression: pp d128K 1364.27/1365.12 vs
+  1485.81/1459.54 (−8%), pp d32K 1553.94/1543.18 vs 1584.66/1577.96, while
+  tg16 stayed within noise (d0 28.68/28.71 vs 28.77/28.64; d128K
+  24.62/24.84 vs 24.73/25.13). No token-generation win justifies the prefill
+  loss; reverted. Suspect the un-rounded `select_chunk` (larger launches at
+  depth) rather than the packed loads.
 - [x] `RoutedPadBounds` clears padding in-kernel, dropping two
   `hipMemsetAsync` calls. Landed `6fd51ed`. Gates: `--validate-prefill 64`
   rmse 0.39 / cosine 0.99 / max 1.88, haiku and 1,951-token greedy identical.
