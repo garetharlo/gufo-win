@@ -240,7 +240,7 @@ memory for the per-session table.
 Acceptance: greedy bit-identical; English/code neutral or faster; CJK/Cyrillic
 faster; no sampled regression.
 
-### [~] #518 — faster Flash-Next decode kernels
+### [x] #518 — faster Flash-Next decode kernels
 
 Upstream: `7e4621c`. **+6–7% single-session decode**, **+4% with 2–4
 sessions**, prefill unchanged, bit-identical. Fifteen small changes: fused Q8_1
@@ -255,7 +255,8 @@ Windows fit: pure HIP. No new switches.
 
 Acceptance: bit-identical outputs; measure tg at d0/32K, single and 4 sessions.
 
-Windows port log (in progress):
+Windows port log (complete; the batched attention loads and
+`RmsNormCachedKernel` were dropped after measurement, see below):
 
 - [x] Stage 1, all eight `mmq/*` files (`5749c46`): a three-way merge against
   `7e4621c^` (base) and `7e4621c` (theirs) is clean for every file once the
@@ -321,10 +322,41 @@ Windows port log (in progress):
   changes, and pinning it would need a per-element barrier. Reverted; the
   hunk stays unported. The remaining vector-load hunks were part of that
   batch.
-- [ ] Stage 3: the executor fused Q8_1 producers (`HcCombineQ8_1`,
-  `SiluScaleQ8_1`, `SigmoidMulQ8_1`, `ReadyQ8` row reuse, `Q8Input` dense
-  overloads) — the bulk of the claim, and the reason the unused stage 1
-  entry points exist.
+- [x] Stage 3 (`4da5063`): the executor fused Q8_1 producers. `HcCombineQ8_1`
+  writes the norm's unpadded Q8_1 rows out of the combine; the plain
+  `HcMixEpilogue` writes `mixed`'s rows (the `mixed_q8` output stage 2b
+  reserved); `GdnEpilogueKernel` writes the F32 ssm rows' rows (new trailing
+  `out_q8_1`, used only when neither `out_q8` nor `out_half` takes the row);
+  and `SigmoidMulQ8_1` writes the gated attention output's rows. The executor
+  keeps those rows in `xn_q8_ready_` / `mixed_q8_ready_` (`ReadyRows`: source
+  pointer, rows, width, dropped at every `Forward`/`MtpForward` entry and
+  wherever the producer's source buffer is rewritten) and `Quantize` returns
+  them instead of launching; `GatedExperts` feeds them to the stage 1
+  `qfn_mmq_moe_gated_vec_preq`, and `ssm_out`/`attn_out` read them through the
+  `Dense(Q8Input)` overload. Each producer writes exactly what
+  `qfn_mmq_quantize_q8_1` would for one 32-lane block per wave, so the rows are
+  byte-identical. Bit-identical: haiku, 1,951-token greedy prompt (only the
+  `[Model Load]` line differs) and `--validate-prefill 64` (rmse 0.39,
+  cosine 0.99, max 1.88). Interleaved `-p 2048 -n 16 -d 0,32768 -r 2` against
+  the stage 2b binary: tg16 d0 29.08/29.10 -> 29.20/29.21 (+0.4%), tg16 d32K
+  26.89/26.99 -> 27.17/27.12 (+0.8%), pp2048 d0 1750.41/1733.41 ->
+  1734.32/1719.41 and pp2048 d32K 1581.38/1572.44 -> 1575.87/1565.95 (both
+  noise, and prefill takes none of these paths); `-d 131072`: tg16
+  24.50/24.49 -> 24.67/24.61 (+0.7%), pp2048 1458.57/1448.29 ->
+  1462.63/1459.53. That is the whole win: the saved work is four quantize
+  launches per layer (xn, mixed, ssm output, attention output) plus the MoE
+  reuse, a few microseconds a step, not upstream's +6-7%, which covers all
+  fifteen changes including the batched attention loads and `RmsNormCached`
+  this fork could not keep. Kept.
+- Stage 3 dropped `SiluScaleQ8_1` and the `lo` rows after measurement. The
+  decode-size `fused_hc_down` GEMV already writes the SiluScale'd `lo`, so
+  taking the Q8_1 route there means replacing that fused launch with an
+  unfused down GEMV plus `SiluScaleQ8_1`: the same three launches as before
+  (down, quantize, up) with the quantize merely moved into the silu pass. With
+  the producer, tg16 read 29.23 d0 / 27.11 d32K; without it (fused launch
+  kept, as this tree already had it) 29.19 / 27.07, inside the run spread, so
+  the smaller change stayed and the kernel, its wrapper, the declaration and
+  the `lo_q8_1` scratch allocation were removed.
 - `git merge-file` against base `fee9d2a` (fork HEAD `2eb0778`, upstream `7e4621c`)
   over the commit's 13 `src/` files: `batch.cpp`, `kernels.hpp`, all of
   `mmq/*` merge clean; `kernels.hip.cpp` has 1 comment-only conflict;
