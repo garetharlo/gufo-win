@@ -393,6 +393,34 @@ Not measured on this host: no Qwen27B GGUF locally (DavidAU cache entry is
 metadata-only). User chose code-only port; gate on Linux CI or when weights
 land. Shortcut: unmeasured perf claim, verify before citing numbers.
 
+### [x] #655 — small MTP draft head for sampled multi-session
+
+Upstream: `b6a671c` (parent `8775189`). When concurrent sampled sessions
+would force the MTP head back to full vocabulary, keep the small per-request
+draft table (#603) instead and score the small head directly: engine-side
+gating in `PrepareDecode`/draft-head selection (`engine.cpp`), draft-vocab
+capacity handling (`draft_vocab.hpp`), tests. Applied as `git diff` →
+3way; clean on `draft_vocab.hpp`, `engine.cpp`, `draft_vocab_test.cpp`;
+`session_test.cpp` hand-merged (kept upstream's reload-with-
+decode-concurrency lambda, dropped a `CheckLookupBatch` call that belongs to
+upstream's later #613 follow-up `8497711`, not in this fork). Also removed
+the stale `continuation_adapter`/`continuation_probe` targets from
+`tests/models/qwen38_flash_next/CMakeLists.txt` (sources were deleted by the
+#603 port but the CMake refs survived — Linux test configure would fail).
+
+Windows gates: single-session greedy haiku and sampled (t 0.8, seed 7)
+byte-identical vs `cdde3e4` base. Earlier multi-session bench attempts
+produced no rows: root cause `serving_bench.py --quick` without `--suite`
+selects zero cases; also pass `--gufo .\gufo.exe` on Windows (the
+`./result/bin/gufo` fingerprint default does not exist here).
+
+Multi-session sampled A/B (2× interleaved, `serve llm -j 4` + serving_bench,
+concurrency 2, t 0.8, 128 out tokens, warmup): aggregate output 33.7 → 39.8
+tok/s (+18%), draft acceptance 0.73 → 0.80; per-request decode 25.2/24.5 vs
+26.4/19.9 — base is bimodal (one request starves at 19.9 tok/s when the full
+head forces it out of the small-head path), #655 removes the slow mode. Same
+acceptance band (0.78-0.82) as base's fast mode, i.e. no quality cost.
+
 ### [ ] #650 — fork recurrent state instead of copying it
 
 
