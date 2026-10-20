@@ -219,30 +219,35 @@ Windows fit: pure host code. Good fit.
 Acceptance: greedy output byte-identical; copy-heavy requests faster; prose not
 slower; sampled extraction not regressed.
 
-### [ ] #603 — score MTP drafts over the request vocabulary
+### [x] #603 — score MTP drafts over the request vocabulary
 
 Upstream: `51a8b00`. Upstream Linux measurements: **+13% coding-agent replay**,
 **+16% everyday prompts**, **+5% across ten languages**, greedy bit-identical.
 
-Important local delta: the fork already has `DraftVocabulary::kLatinText`
-(`engine.cpp:39–93,207–210`), which halves the output head for ASCII/Latin
-text. This is **not** a +13–16% win over the current Windows build for
-English/code. The increment is:
+Ported via `git cherry-pick -n 51a8b00` + hand merge. Dropped as N/A in the
+fork: grammar `constraint` term in the `unmodified` check (fork sampler has no
+constraints), `continuation_hooks.hpp`/`ContinuationHooks` member and include
+(fork deleted the adapter; upstream commit itself only moved the lines), the
+`src/core/hip/managed_alloc.hpp` include in batch.cpp (no such file in fork;
+unused there), and upstream's duplicate `PenalizedArgmax` (fork already has it).
+Kept: `draft_vocab.hpp`, `SetDraftVocab`/`AppendDraftRows`/`ClearDraftRows`,
+`MaskDraftLogits`/`GatherDraftLogits`/`RemapDraftIds` kernels, `MtpOutput`
+`kv_only`/`draft_subset`, `kMtpDraftExtraRows` device draft table,
+`small_head_cycles` stat, `kSnapshotPayloadVersion` 15→17, adaptive draft
+length. Test files (`session_test.cpp`, `CMakeLists.txt`, new
+`draft_vocab_test.cpp`) taken from upstream — Linux CI is their executor.
+Caution: a botched conflict splice had flattened `kernels.hip.cpp` to one line;
+restored from HEAD and re-inserted the three kernels by hand.
 
-- request-aware first-98,304-row subset plus a 1,024-row per-session table,
-- fallback for non-Latin text,
-- adaptive draft length from draft confidence.
-
-Changes: add `draft_vocab.hpp`; port `SetDraftVocab`, `AppendDraftRows`,
-`ClearDraftRows` and `draft_subset` through the executor/engine; replace the
-fixed Latin vocabulary path. Local executor already has a `draft_vocab` vector,
-so adapt rather than reimplement.
-
-Windows fit: host + row-gather kernel; no OS dependency. Check batched-session
-memory for the per-session table.
-
-Acceptance: greedy bit-identical; English/code neutral or faster; CJK/Cyrillic
-faster; no sampled regression.
+Gates (UD-Q4_K_XL, 4-shard, interleaved A/B vs stash-rebuilt baseline):
+- `--validate-prefill 64`: rmse 0.31 / cosine 0.99 / max 1.57 — unchanged from
+  baseline.
+- Greedy haiku (40 tok) and sampled prompt (80 tok, `-t 0.8 -s 7`):
+  byte-identical.
+- Perf: d0 pp2048 1632/1636, tg256 29.25/29.11; d32768 tg256 26.72/26.57 —
+  neutral, as predicted at line 945 (fork's Latin vocab split already captured
+  the bulk of the win). The port's value here is parity with upstream
+  (#660 wave64 verification builds on it) and the non-Latin fallback path.
 
 ### [x] #518 — faster Flash-Next decode kernels
 
