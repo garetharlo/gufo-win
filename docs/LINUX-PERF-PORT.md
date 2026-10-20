@@ -438,30 +438,26 @@ device-loss tracking in fork). Verified live: UD-Q4_K_XL serve returns
 model_path, build_info=development, n_ctx=262144, vision=false; `/slots`
 still 200.
 
-### [ ] #650 — fork recurrent state instead of copying it
-
+### [x] #650 — fork recurrent state instead of copying it
 
 Upstream: `95ba1ea`. Qwen27B 4-request aggregate **64.4 → 68.0 tok/s
 (+4–6%)**, single request **+2.5%**, copy time **861 → 24 ms**, outputs
 identical.
 
-Local divergence in the relevant files is small:
+Ported whole (`git apply --3way`, per-conflict keep-theirs on the 7 conflicted
+src files after `git checkout -m`). This replaces the fork's Windows "lazy
+recurrent save" workaround entirely: `SavedStateAliasesLive`/`Spare*`/
+`CommitOutOfPlaceState`/`MaterializeSavedState`, `conv_src`/`recurrent_src`
+out-of-place kernel args and the `kLazyRecurrentSave` branches are gone;
+`RestoreState` is the upstream live/saved buffer swap. The separate Windows
+SDMA `LaunchDeviceCopy27` workaround is kept (snapshot copies, unrelated).
 
-- `src/models/qwen/hip/arena.cpp` (10 lines vs base)
-- `src/models/qwen/hip/ssm_replay.cpp` (66/8)
-- `src/models/qwen/hip/decode.cpp` (7)
-- `src/models/qwen/hip/executor.cpp` (56/32)
-- `kernels/deltanet_decode.hpp`, `ops/ssm.hpp`
-
-Changes: two conv/deltanet buffer pairs, live/saved/source indices,
-`QwenRecurrentStateIo` with in/out pointers, rollback diverts the next pass
-instead of `hipMemcpy`, snapshot sync before transfer, only the header zeroed
-in `SerializeCompact`.
-
-Windows fit: pure HIP. **Check VRAM headroom** for the second buffer pair; the
-gain comes from removing copies.
-
-Acceptance: outputs identical; 1-request and 4-request Qwen27B decode improve.
+Gates: Qwen3.8-27B Q4_K_S greedy haiku byte-identical vs `b054756`; Flash-Next
+UD-Q4_K_XL + MTP speculative greedy identical (shared speculative_verifier
+paths). Plain bench neutral (pp2048 ~428, tg128 ~12.4 both exes) — the copy
+elimination only shows under speculative/served 27B decode, and there is no
+27B MTP draft model on this host to measure it; shortcut: perf claim rests on
+upstream's dflash2 measurement, re-measure when a 27B draft ships.
 
 ---
 
