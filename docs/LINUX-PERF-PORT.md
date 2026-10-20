@@ -654,7 +654,7 @@ pp2048 d0 1667.06±6.79 (neutral), d32K 1522.05±4.81 (neutral), d128K
 **1414.03±24.54 vs 1391.00** (+1.7%), tg16 neutral at all depths. Greedy
 haiku identical ("Time writes in the wet."). Rollback: revert `0857383`.
 
-### [ ] #470 - 4096-token prefill chunks + overlapped n-gram gather
+### [x] #470 - 4096-token prefill chunks + overlapped n-gram gather
 
 
 
@@ -691,6 +691,25 @@ overlap, so the constant stays at 2048. The rest of #470 only pays with the
 
 Acceptance: logits independent of chunk size; long prompts faster; short
 prompts and decode not slower.
+
+Ported (upstream `47b6391`, diffed against parent `7701ba7`): chunk raised to
+4096, `next` span threaded through `Feed`/`Sync`/`Executor::Forward`
+(prefetches the next chunk's PLE n-gram rows during the current pass),
+`FinishPrefetch` claim path in `WaitPle`, per-read `notify_one` in
+`ngram.cpp` (Linux worker count 32; kept `kWindowsWorkers = 128`),
+scheduler short-prefill heuristics via new `Request::prefill_position()`
+(getter over the existing `prefill_offset`). Dropped as not in the fork:
+`PrefillThroughCapacity`/`kPrefillTailTokens` (no 128-token tail; both
+branches of its use collapse to `PrefillCapacity`), `PrefillCheckpoint`/
+`SyncThrough` capture stack, checkpoint plumbing in `Feed`.
+`Feed`'s loop now uses upstream's fits-through capacity pattern so a final
+chunk is not split.
+
+Windows gates (UD-Q4_K_XL): `--validate-prefill 64` rmse 0.31 / cosine 0.99 /
+max 1.57 (baseline unchanged); greedy haiku byte-identical (only model-load
+timing digits differ); pp4096 1544→1663 (+5–7% across 2 interleaved rounds),
+pp24576 1429→1528 (+6.4%), pp65536 1395→1490 (+6.6%); tg64 @ d32768
+26.45→26.58 (noise). Matches upstream's claimed 6–11% for 24K+ prompts.
 
 ### [~] #571 — faster wide prefill kernels
 

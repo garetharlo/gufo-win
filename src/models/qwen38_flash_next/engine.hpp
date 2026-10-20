@@ -152,9 +152,12 @@ public:
   Session& operator=(const Session&) = delete;
 
   /// Makes the session state equal to `prompt`: keeps the longest common
-  /// prefix with the current tokens, reprocesses the rest.
+  /// prefix with the current tokens, reprocesses the rest. `next` may name
+  /// the tokens the following Sync will append, so their n-gram rows can be
+  /// read during this one; it never changes the result.
   [[nodiscard]] bool Sync(std::span<const std::int32_t> prompt,
-                          std::string* error_msg = nullptr);
+                          std::string* error_msg = nullptr,
+                          std::span<const std::int32_t> next = {});
   [[nodiscard]] bool Evaluate(std::int32_t token,
                               std::string* error_msg = nullptr);
   /// Appends `tokens` through the decode arithmetic: one token as a decode
@@ -268,7 +271,7 @@ private:
   Session(std::shared_ptr<Model> model, std::unique_ptr<rocm::Session> session);
 
   bool Feed(std::span<const std::int32_t> tokens, std::string* error_msg,
-            bool prefill = false);
+            bool prefill = false, std::span<const std::int32_t> after = {});
   /// Trunk rows the draft block may still read: [hidden_base_, size).
   [[nodiscard]] std::uint32_t KeptHiddenRows() const noexcept;
   bool DraftCatchUp(std::int32_t next_token, bool propose,

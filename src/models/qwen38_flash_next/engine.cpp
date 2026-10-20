@@ -27,9 +27,12 @@
 namespace gufo::models::qwen38_flash_next {
 namespace {
 
-// gfx1151 pp4096 at depths 0/4096: the 512/1024/2048/4096 sweep favored
-// 2048; larger chunks used more scratch without improving throughput.
-constexpr std::uint32_t kPrefillChunkTokens = 2048;
+// gfx1151, served repository prompts: 4096-token chunks prefill 24K-102K
+// tokens 6-11% faster than 2048 (pp4096 +5% at d0, +6% at d32K). Each
+// chunk's n-gram gather doubles; next-chunk prefetch overlaps that read.
+// Prefill logits do not depend on the chunk size
+// (pre-budget queries always take the dense attention tiles).
+constexpr std::uint32_t kPrefillChunkTokens = 4096;
 
 void AssignError(std::string* error_msg, std::string_view message) {
   if (error_msg != nullptr) {
@@ -673,14 +676,18 @@ bool Session::DraftCatchUpBatch(std::span<const AdvanceRequest> requests,
 }
 
 bool Session::Feed(std::span<const std::int32_t> tokens, std::string* error_msg,
-                   bool prefill) {
+                   bool prefill, std::span<const std::int32_t> after) {
   if (!EnsureFrontier(error_msg)) {
     return false;
   }
   rocm::Executor& exec = *model_->executor_;
-  for (std::size_t off = 0; off < tokens.size(); off += exec.max_batch()) {
-    const std::size_t n =
-        std::min<std::size_t>(exec.max_batch(), tokens.size() - off);
+  for (std::size_t off = 0; off < tokens.size();) {
+    const auto remaining = tokens.size() - off;
+    // Fits-through capacity lets a final chunk absorb the 128-token tail.
+    const auto capacity = remaining <= exec.max_batch()
+                              ? exec.max_batch()
+                              : model_->PrefillCapacity();
+    const std::size_t n = std::min<std::size_t>(capacity, remaining);
     const auto chunk = tokens.subspan(off, n);
     if (MtpEnabled() && !tokens_.empty() &&
         !DraftCatchUp(chunk[0], false, error_msg)) {
@@ -688,19 +695,27 @@ bool Session::Feed(std::span<const std::int32_t> tokens, std::string* error_msg,
     }
     const auto mode = prefill ? rocm::Executor::ForwardMode::kPrefill
                               : rocm::Executor::ForwardMode::kDecode;
+    // The chunk this loop, or the following Sync, takes next.
+    const auto rest = off + n < tokens.size() ? tokens.subspan(off + n) : after;
+    const auto next = rest.first(std::min<std::size_t>(
+        rest.size() <= exec.max_batch() ? exec.max_batch()
+                                        : model_->PrefillCapacity(),
+        rest.size()));
     anchor_candidates_valid_ = false;
-    if (!exec.Forward(*session_, chunk, 1, logits_.data(), mode, error_msg)) {
+    if (!exec.Forward(*session_, chunk, 1, logits_.data(), mode, error_msg,
+                      /*verify_candidates=*/false, next)) {
       return false;
     }
     hidden_base_ = static_cast<std::uint32_t>(
         tokens_.size() + n - std::min<std::size_t>(n, exec.max_speculative()));
     tokens_.insert(tokens_.end(), chunk.begin(), chunk.end());
+    off += n;
   }
   return true;
 }
 
-bool Session::Sync(std::span<const std::int32_t> prompt,
-                   std::string* error_msg) {
+bool Session::Sync(std::span<const std::int32_t> prompt, std::string* error_msg,
+                   std::span<const std::int32_t> next) {
   if (prompt.empty()) {
     AssignError(error_msg, "prompt is empty");
     return false;
@@ -729,7 +744,7 @@ bool Session::Sync(std::span<const std::int32_t> prompt,
     common = 0;
   }
   valid_ = false;
-  const bool ok = Feed(prompt.subspan(common), error_msg, true);
+  const bool ok = Feed(prompt.subspan(common), error_msg, true, next);
   valid_ = ok;
   return ok;
 }
