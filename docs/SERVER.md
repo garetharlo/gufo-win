@@ -147,6 +147,20 @@ work can batch across ready requests. See the
 Each model chooses its prefill chunk. `--prefill-chunk` limits prompt work
 between active decode rounds without changing a lone request's kernel policy.
 
+Qwen image requests reuse decoded and resized RGB pixels using a fast lookup
+hash and exact encoded-byte comparison under the preprocessing version. Each
+loaded Qwen runner retains up to 128 MiB of encoded bytes and resized pixel
+vectors combined, evicting least-recently-used images; entry metadata is also
+bounded. `cache_prompt: false` bypasses this reuse as well as continuation reuse.
+Requests share immutable buffers, so eviction does not invalidate an in-flight
+request. This CPU cache is separate from any snapshot budget and is not
+written to disk. A resized 1920×1080 screenshot takes about 6 MiB of RGB storage,
+plus its encoded bytes. Warm history still pays for prompt rendering,
+tokenization and the existing pixel/position identity hash; a new screenshot
+still needs vision encoding and prefill. Debug logs expose `event=image_cache`
+with whether reuse is enabled, entries, retained pixel/encoded bytes, hits,
+misses and evictions.
+
 Prompt reuse is enabled by default. `cache_prompt: false` on
 `/v1/chat/completions` bypasses both memory and disk lookup for that request;
 the result can still populate the cache. DeepSeek and Qwen tool requests retain

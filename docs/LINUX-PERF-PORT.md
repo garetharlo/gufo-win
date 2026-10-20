@@ -812,9 +812,9 @@ its run-to-run noise. Kept.
 
 Windows fit: pure HIP.
 
-### [ ] #645 — reuse historical image preprocessing
+### [x] #645 — reuse historical image preprocessing
 
-Upstream: `f948ddd`. Image queue medians:
+Upstream: `f948ddd`, ported as of October 2026. Image queue medians:
 
 - 1 image **45.01 → 9.65 ms**
 - 2 images **82.40 → 13.25 ms**
@@ -829,6 +829,13 @@ by exact image bytes), hook it in `src/cli/serve/inference_backend.cpp`, and
 add the prompt-side reuse path.
 
 Windows fit: pure host code. Only matters for multimodal workloads.
+
+Port notes: dropped upstream `control_tokens.hpp` include (not in fork),
+replaced `Logger::LogFormatted` debug stats with a one-line `Logger::Info`
+(fork has no formatted logger), and dropped `CountPromptTokens` overrides
+(upstream #510 virtual, absent in fork; cache works without it). Verified:
+serve llm + mmproj BF16, two identical image requests — second logs
+`event=image_cache hits=1 misses=1`, identical responses.
 
 ---
 
