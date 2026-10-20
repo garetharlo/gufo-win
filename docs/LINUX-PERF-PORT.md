@@ -632,22 +632,20 @@ exists here as `keep_rollback_rows`; kernels only.
   vs 23.77±0.36 (+0.8%)**, tg d0/d32K neutral. Greedy haiku identical
   ('Time writes in the wet.'); `--validate-prefill 64` rmse 0.38 cosine 0.99
   max 1.96. Rollback: revert d6319c5.
-- [~] Dense prefill attention per-tile overhead + sparse softmax masking +
-      pinned PV WMMAs (WmmaCausalAttentionKernel slice). Ported fully from
-      upstream `5a1669a` (kScoreStride 20 + float4 softmax reads, parity-
-      grouped row_scale with float4 rescale reads, memcpy-packed p_lds rows,
-      dense fast paths in gather_tile/tile_key, per-lane block_selected,
-      dpp/perm V word staging, sched_barrier in the S loop, PV pin asm) as
-      `gufo-626-wmma*.exe`. Interleaved A/B vs `gufo-626-groups.exe` showed
-      **neutral** at pp2048 d0/d32K, measured while the GPU had drifted ~7%
-      below earlier-session numbers (1668 -> ~1550 pp d0, both binaries
-      equally, fixed by a reboot). **Post-reboot validation (pp d0
-      1687/1667):** warm interleaved A/B neutral at d0 (1666.58 vs 1667.71),
-      +0.6% at d32K (1516.41 vs 1525.47); the first cold run favors the
-      reference by 2.3%. Confirmed: no reliable win on our kernel, which
-      lacks upstream's split `k_lds`/`v_lds` two-buffer phase pipeline this
-      slice was tuned for (we keep one `kv_lds`, so the phase-A/B PV pin does
-      not apply). Slice stays reverted; #626 is done (slices 1-2 landed).
+- [x] Dense prefill attention per-tile overhead + sparse softmax masking +
+      pinned PV WMMAs (WmmaCausalAttentionKernel slice). First port (while the
+      kernel still had a single `kv_lds`) measured neutral and was reverted.
+      Re-ported after #571 landed the split `k_lds`/`v_lds` two-buffer phase
+      pipeline this slice was tuned for (kScoreStride 20 + float4 softmax
+      reads, parity-grouped row_scale, memcpy-packed p_lds rows, dense fast
+      paths in gather_tile/tile_key, per-lane block_selected, dpp/perm V word
+      staging, sched_barrier in the S loop, PV pin asm). Gates: greedy haiku
+      byte-identical, `--validate-prefill 64` rmse 0.31 cosine 0.99 max 1.57.
+      Interleaved A/B (2×, alternating order): pp2048 d0 +0.5% (1641.86 vs
+      1633.34), pp2048 d32K **+1.5%** (1417.02 vs 1396.54), pp24576 d0 +0.9%
+      (1545.97 vs 1532.19), pp24576 d32K **+1.1%** (1497.63 vs 1480.66 and
+      reversed-order pass 1494.69/1492.05 vs 1478.14/1472.58), tg16 neutral
+      at all depths. Kept.
 
 Measured (commit `0857383`, bench `-p 2048 -n 16 -r 3` / `-r 2` at d128K):
 pp2048 d0 1667.06±6.79 (neutral), d32K 1522.05±4.81 (neutral), d128K
