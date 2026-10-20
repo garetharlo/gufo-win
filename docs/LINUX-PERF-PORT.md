@@ -862,11 +862,19 @@ this host) passes including the new `TestBlockSkippedTopKAgainstFullSort`;
 sampled A/B (t 0.8, top-k 64, top-p 0.95, seed 42, 120 tokens) byte-identical
 to baseline.
 
-### [ ] #332 — GPU greedy penalties
+### [x] #332 — GPU greedy penalties
 
 Upstream: `7e450e8`. Avoids the GPU→CPU fallback when greedy MTP uses
 presence/repetition penalties. Adds a penalty kernel and executor changes.
 Only worth it if penalties are actually used.
+
+Ported (fork delta: no grammar/constraint system, so `CanSelectArgmax` is
+penalty-only and `WithoutConstraint` was dropped; `GreedyMtpPredictions`
+copies the sampler state to apply tentative penalty rows). Gates: greedy
+haiku, greedy with `--repeat-penalty 1.15 --presence-penalty 0.3`, and
+sampled (t 0.8, seed 42) all byte-identical to the pre-port baseline;
+penalized greedy now stays on the GPU argmax path. Perf not re-benched
+(upstream win applies to penalty-configured greedy serving).
 
 ### [ ] #348 — skip disk checkpoints that barely advance a prefix
 
