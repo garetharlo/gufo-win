@@ -775,7 +775,20 @@ a tile, software-pipelined attention, GDN q/k in registers.
       1489.98 and 1497.06 -> 1492.32, tg neutral. No win: upstream's +1.1%
       needs whole-prompt batches a few tokens past a 128 multiple, while our
       2048-token chunking rarely lands the final chunk in 129-144. Reverted.
-- [ ] software-pipelined attention, GDN q/k in registers.
+- [x] **software-pipelined attention, GDN q/k in registers** (`a33e989`, the
+  last open #571 sub-item): the WMMA causal-attention kernel stages the next
+  K/V tiles into separate `k_lds`/`v_lds` shared buffers while the current
+  tile's PV accumulate runs (the `kLateV` deep-window special case and the
+  unified `kv_lds` buffer are gone; the deep-window branch at `start_pos >=
+  65536` now uses the same pipelined kernel), softmax/accumulate became
+  lambdas over a `Tile` struct, and the running-sum update uses `__fmaf_rn`
+  so fast-math cannot reassociate the rescale. The GDN mixer's windowed q/k
+  loads moved from a `float4 qk[kQkPerThread]` array (private memory,
+  reloaded every window) to two named registers. Exact: greedy haiku
+  byte-identical, `--validate-prefill 64` unchanged (rmse 0.31, cosine 0.99,
+  max 1.57). Measured, interleaved, two rounds per side: pp2048 1615.6 →
+  1629.8 (+0.9%), pp24576 1523.3 → 1535.5 (+0.8%), pp24576 @d32768 1466.0 →
+  1475.7 (+0.7%), tg neutral.
 
 Windows fit: pure HIP, but large kernel rewrite against a diverged fork. Do
 last; port one kernel family at a time.
