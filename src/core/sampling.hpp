@@ -90,6 +90,11 @@ public:
   SamplerState& operator=(SamplerState&&) noexcept = default;
 
   [[nodiscard]] const SamplingConfig& config() const noexcept;
+  /// A finite argmax can bypass downloading logits if it satisfies penalties.
+  /// Set penalties_applied only for a winner computed with this state's exact
+  /// penalty arithmetic and history; raw model argmaxes leave it false.
+  [[nodiscard]] bool CanSelectArgmax(TokenId token,
+                                     bool penalties_applied = false) const;
   [[nodiscard]] std::span<const TokenId> history() const noexcept;
   [[nodiscard]] std::span<const TokenPenalty> penalties() const noexcept {
     return penalty_counts_;

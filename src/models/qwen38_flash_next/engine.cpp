@@ -1037,7 +1037,8 @@ bool Session::PrepareDecode(const DecodeRequest& request,
 
   const std::uint32_t base = static_cast<std::uint32_t>(tokens_.size());
   const bool sampled = sampler.config().uses_random_sampling();
-  const bool gpu_greedy = sampler.config().can_use_unmodified_argmax();
+  // #332: GPU greedy now applies penalties, so temperature alone gates it.
+  const bool gpu_greedy = sampler.config().temperature == 0.0F;
   const bool gpu_verification = gpu_greedy;
   if (allow_subset && !SyncDraftVocab(error_msg))
     return false;
@@ -1149,7 +1150,8 @@ bool Session::FinishDecode(const DecodeRequest& request,
   sampler.Accept(static_cast<sampling::TokenId>(anchor));
   std::array<rocm::ArgmaxCandidate, kMaxMtpDraftTokens> greedy{};
   if (gpu_greedy &&
-      !exec.GreedyMtpPredictions(std::span(greedy).first(k - 1), error_msg)) {
+      !exec.GreedyMtpPredictions(std::span(greedy).first(k - 1), sampler,
+                                 std::span(chain).subspan(1), error_msg)) {
     return false;
   }
   // Tuning::fast_sampling: sampled verification reads GPU-selected
