@@ -905,6 +905,20 @@ preflight skips the device-state copy when the store would discard the result,
 `--cache-disk` — turn 1 stores (write_ms=4316), turns 2–3 skip with
 `action=skipped reason=min_step`.
 
+### [x] #664 - price greedy MTP drafts at the decoding occupancy
+
+Upstream: `2caf2a8`, ported 2026-10-20. Draft length now adapts to session
+concurrency via `draft_length_.Choose(cap, tokens, policy_concurrency)` with
+`policy_concurrency` from `model_->DecodeConcurrency()` (also persisted in the
+snapshot header, bump-checked). Fork merge note: kept the fork-only `survival`
+branch ahead of `Choose`; `batch_drafts` short-circuit unchanged.
+
+Gates: greedy MTP haiku byte-identical vs `2d9027a` base; single-session
+speculative bench neutral (tg128 38.2 vs 38.3, d32K 78.6 vs 78.7); 4-session
+greedy serve A/B 2x2 interleaved neutral within run-to-run drift (aggregate
+~50.0 vs ~50.5 tok/s, ±3 noise). No regression; kept for upstream parity —
+the occupancy pricing matters at higher concurrency than this host benches.
+
 ### [x] #499 — stage Qwen-Image weight uploads through pinned buffers
 
 Upstream: `eb91daa`. Local `qwen_image_21/weights.cpp` uses `mmap`; staging
