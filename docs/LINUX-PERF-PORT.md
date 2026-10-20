@@ -460,7 +460,17 @@ stack, so checkpoint code is dropped from every slice.
 
 - [x] **GDN row reuse** in `GdnRowSplitKernel`: two rows per lane, four waves,
   128 threads per block, shared `q`/`k` loads reused across the row pair.
-- [ ] Padded SSM F16 rows (`half_stride`, `DenseF16Gemm` `kStrided`).
+- [ ] ~~Padded SSM F16 rows (`half_stride`, `DenseF16Gemm` `kStrided`).~~
+  **Rejected locally (2026-10-19).** Ported `GdnEpilogueKernel`
+  `out_half_stride`, `GatedDeltaNet`/`DenseF16Gemm` plumbing and the
+  `kStrided` `b_ptr` stride (skipping upstream's partial-tile restructure;
+  chunks are 2048 = full tiles). Gates passed (rmse 0.39 / cosine 0.99 /
+  max 1.88; haiku + 1,951-token greedy identical), but interleaved A/B vs
+  baseline showed no win: tg16 d0 28.98/29.09 vs 29.12/29.53, d32K
+  26.91/27.18 vs 27.18/26.78, d128K 24.91/25.05 vs 24.82/24.88 — all within
+  noise with no consistent direction; pp2048 1740/1728 vs 1746/1740, d32K
+  1585/1578 vs 1590/1580, d128K 1443/1463 vs 1456/1452 — equal-to-slightly-
+  behind. Reverted.
 - [ ] ~~Full selector scratch (`select_chunk` without `bit_floor`,
   `first_query = n_tokens - 16` for `last_only`), packed `SelectScore` half2
   loads and `sched_barrier`.~~ **Rejected locally (2026-10-19).** Gates passed
