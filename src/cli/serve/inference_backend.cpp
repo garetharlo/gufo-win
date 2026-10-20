@@ -2739,6 +2739,7 @@ struct InferenceBackend::Impl {
     ReasoningOptions reasoning_defaults;
     std::string model_path;
     std::string build_info;
+    bool supports_images{false};
   };
 
   class ScheduledGenerationRequest final : public GenerationRequest {
@@ -3210,6 +3211,7 @@ bool InferenceBackend::load(std::shared_ptr<const hip::QwenGpuModel> model,
         disk_cache_config.draft_model_artifact_fingerprint);
     new_state->model_id = runner->Descriptor().model_id;
     new_state->max_context = max_context;
+    new_state->supports_images = model->VisionEncoder() != nullptr;
     std::optional<TextRunnerDiskCacheOptions> runner_disk_cache;
     if (DiskCacheEnabled(disk_cache_config)) {
       runner_disk_cache = TextRunnerDiskCacheOptions{
@@ -3375,6 +3377,7 @@ bool InferenceBackend::load(
         disk_cache_config.draft_model_artifact_fingerprint);
     new_state->model_id = runner->Descriptor().model_id;
     new_state->max_context = max_context;
+    // This overload has no vision model; the load() that takes one sets it.
     std::optional<TextRunnerDiskCacheOptions> runner_disk_cache;
     if (DiskCacheEnabled(disk_cache_config)) {
       runner_disk_cache = TextRunnerDiskCacheOptions{
@@ -3411,6 +3414,17 @@ std::string InferenceBackend::model_id() const {
 bool InferenceBackend::ready() const {
 #if defined(ENGINE_ENABLE_HIP)
   return impl_->Snapshot() != nullptr;
+#else
+  return false;
+#endif
+}
+
+bool InferenceBackend::device_lost() const { return false; }
+
+bool InferenceBackend::supports_images() const {
+#if defined(ENGINE_ENABLE_HIP)
+  const auto state = impl_->Snapshot();
+  return state != nullptr && state->supports_images;
 #else
   return false;
 #endif

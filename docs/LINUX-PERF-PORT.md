@@ -421,6 +421,23 @@ tok/s (+18%), draft acceptance 0.73 → 0.80; per-request decode 25.2/24.5 vs
 head forces it out of the small-head path), #655 removes the slow mode. Same
 acceptance band (0.78-0.82) as base's fast mode, i.e. no quality cost.
 
+### [x] #668 — stop batched greedy DSpark frontier before accepted EOS
+
+Upstream 1b0a5a8 (fix). Batched greedy DSpark decoding ran the frontier past a
+token the batch had already accepted as EOS, corrupting subsequent generation.
+Ported to `src/models/deepseek_v4_flash` (native_internal.h, rocm_graph.cpp).
+No DSpark weights on this host, so behavior is CI-gated; Windows build clean.
+
+### [x] #669 — report model/build/context/vision in `/props`
+
+Upstream 4862410. `/props` now returns model, model_alias, model_path,
+build_info, default_generation_settings (n_ctx + sampling params) and
+modalities (vision/video/audio). Dropped upstream's `session_states()`/total
+slots (depend on #389, not in this fork); `device_lost()` returns false (no
+device-loss tracking in fork). Verified live: UD-Q4_K_XL serve returns
+model_path, build_info=development, n_ctx=262144, vision=false; `/slots`
+still 200.
+
 ### [ ] #650 — fork recurrent state instead of copying it
 
 
