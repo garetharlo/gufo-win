@@ -919,6 +919,18 @@ greedy serve A/B 2x2 interleaved neutral within run-to-run drift (aggregate
 ~50.0 vs ~50.5 tok/s, ±3 noise). No regression; kept for upstream parity —
 the occupancy pricing matters at higher concurrency than this host benches.
 
+### [x] #676 - report no content for whitespace between parallel tool calls
+
+Upstream: `9a9717c`, ported 2026-10-20. Fork's `ParseGeneration` has no
+upstream `ContentBefore` (different, older tool-call parser); the equivalent
+point is where `parsed.text = text_before_tools`. Ported as: when tool calls
+were parsed and `Trim(text_before_tools)` is empty, emit `""` instead of the
+whitespace separator. Added `TestParallelCallSeparatorIsNotContent` to
+tests/cli/openai_chat_test.cpp using the fork's FakeBackend harness
+(upstream's 80-line test targets APIs the fork lacks). Verified live:
+parallel `get_weather` Rome+Milan with `tool_choice=required` returns two
+`tool_calls` and `content: null`.
+
 ### [x] #499 — stage Qwen-Image weight uploads through pinned buffers
 
 Upstream: `eb91daa`. Local `qwen_image_21/weights.cpp` uses `mmap`; staging
