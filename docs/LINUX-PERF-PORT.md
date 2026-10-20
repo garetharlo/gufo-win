@@ -379,7 +379,22 @@ Windows port log (complete; the batched attention loads and
 - Merge scratch (ours/base/theirs/merged, LF blobs) is kept at
   `%TEMP%\opencode\merge518` for reference.
 
+### [x] #660 — wave64 verification attention (rows > 1)
+
+Upstream: `d1830de` (parent `270b533`, so the direct diff is exactly this PR).
+Qwen27B MTP verification attention: multi-row decode now runs as wave64 with
+shared per-head steps instead of wave32 split-K. Files:
+`src/models/qwen/hip/kernels/attention_decode.hip` (+122, split-K single-row
+path kept wave32), new `attention_decode_split_k.hpp`,
+`attention_decode_verify_wave64.hip/.hpp`, CMake +2, test updates, bench
+build.sh. Applied as `git diff 270b533 d1830de` → 3way, all clean; builds OK.
+
+Not measured on this host: no Qwen27B GGUF locally (DavidAU cache entry is
+metadata-only). User chose code-only port; gate on Linux CI or when weights
+land. Shortcut: unmeasured perf claim, verify before citing numbers.
+
 ### [ ] #650 — fork recurrent state instead of copying it
+
 
 Upstream: `95ba1ea`. Qwen27B 4-request aggregate **64.4 → 68.0 tok/s
 (+4–6%)**, single request **+2.5%**, copy time **861 → 24 ms**, outputs
