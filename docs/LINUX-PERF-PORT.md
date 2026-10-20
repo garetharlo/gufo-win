@@ -464,8 +464,14 @@ stack, so checkpoint code is dropped from every slice.
 - [ ] Full selector scratch (`select_chunk` without `bit_floor`,
   `first_query = n_tokens - 16` for `last_only`), packed `SelectScore` half2
   loads and `sched_barrier`.
-- [ ] `RoutedPadBounds` clears padding in-kernel, dropping two
-  `hipMemsetAsync` calls.
+- [x] `RoutedPadBounds` clears padding in-kernel, dropping two
+  `hipMemsetAsync` calls. Landed `6fd51ed`. Gates: `--validate-prefill 64`
+  rmse 0.39 / cosine 0.99 / max 1.88, haiku and 1,951-token greedy identical.
+  Measured same session, `gufo bench -p 2048 -n 16 -d 0,32768,131072 -r 2`,
+  interleaved vs `gufo-518-q8b.exe`: tg16 d32K 26.99/27.22 vs 26.90/26.95,
+  tg16 d128K 24.92 vs 24.85, tg16 d0 29.02/29.31 vs ~27/29.27, pp
+  equal-or-ahead (1746/1740 vs 1729 baseline). Decode consistently ahead;
+  kept on token-generation grounds.
 - [x] `HcMix` `half_only`, skipping the F32 and Q8 copies when both stacked
   SSM projections read the F16 input the wide mixer already wrote. Needs the
   `y != nullptr` guard in the `kHcMix` epilogue and the relaxed
