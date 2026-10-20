@@ -1194,9 +1194,8 @@ int RunServe(std::span<const char* const> args) {
       return 1;
     }
     backend->set_model_id(served_model_name);
-    // As `gufo --version` prints it; CMake defines both for this target.
-    backend->set_served_artifact(model,
-                                 GUFO_RELEASE_VERSION " (" GUFO_REVISION ")");
+    // As `gufo --version` prints it; CMake defines it for this target.
+    backend->set_served_artifact(model, GUFO_VERSION);
     backend->set_sampling_defaults(
         max_tokens < 0 ? 0 : static_cast<std::size_t>(max_tokens),
         sampling_config);

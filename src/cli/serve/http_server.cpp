@@ -907,7 +907,11 @@ HttpResponse LlamaProps(const HttpRequest& req, TextGenerationBackend& b) {
 
   // What a request without sampling fields gets.
   const auto defaults = b.sampling_defaults();
-  const auto sampling = defaults.Resolve(b.reasoning_defaults().enabled);
+  auto sampling = defaults.sampling;
+  if (b.reasoning_defaults().enabled && sampling.temperature < 0.01f) {
+    sampling.temperature = 0.6f;
+    sampling.top_p = 0.95f;
+  }
   json::Value params = json::Value::object();
   params["temperature"] = static_cast<double>(sampling.temperature);
   params["top_k"] = static_cast<int>(sampling.top_k);
