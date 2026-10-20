@@ -603,7 +603,7 @@ This is the documented FP reassociation the acceptance criteria allow;
 prefill validation and decode rates are unaffected, and no sampling,
 draft-vocabulary or precision change is involved.
 
-### [~] #626 — cut prefill and decode attention cost at depth
+### [x] #626 — cut prefill and decode attention cost at depth
 
 Upstream: `5a1669a`. Upstream measured pp128K 1511 → 1539 tok/s, sparse
 attention 107.1 → ~96 ms per pp2048 at 30K, tg64 d128K 27.5 → 27.85. All
