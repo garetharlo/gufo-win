@@ -760,8 +760,9 @@ so prefill and loading lead):
    landed (+1.75% pp2048 d0, +1.7% d32K); the remaining seven slices are
    listed in its section.
 3. `#470` — 2048 vs 4096 chunk sweep on Windows; only then decide.
-4. Loading-time investigation: compare the Windows read/upload path with the
-   upstream 16.42 s reference before porting anything.
+4. ~~Loading-time investigation~~ done: the gap is Windows NTFS serializing
+   unbuffered reads of the mapped shard, and the cached alternative thrashes
+   the page cache; see "Windows loading path" under known differences.
 5. `#571` / `#626` / `#622` — wide and long-context prefill kernels.
 6. `#518` + `#650` — decode kernels, only after prefill lands and with a
    bit-identical check (decode is at parity today).
@@ -884,3 +885,20 @@ the baseline binary and run both in one sitting.
   Windows, not just on Linux.
 - `docs/WINDOWS.md` is the source for Windows-specific runtime behavior and
   environment switches.
+
+### Windows loading path (investigated, not changed)
+
+Local load stays at 34.7 s warm and 45–59 s cold against the upstream 16.42 s.
+`WeightUpload` is the only loader that reopens the shard with `O_DIRECT`;
+`compat/win32/posix.cpp` documents why that costs here: NTFS serializes
+unbuffered reads of a file that is also mapped, and the GGUF is mapped. A
+single-thread buffered read of one shard measures 2.35 GiB/s, so the measured
+3.0 GiB/s aggregate is consistent with one serialized stream rather than
+sixteen.
+
+Reopening with `O_CONCURRENT_RANDOM` (cached overlapped) removes the
+serialization but cannot be kept: the 103.69 GiB device allocation plus a
+103.69 GiB file that becomes page-cache resident exceeds the host's 128 GiB, so
+repeated loads measured 29.15 s and 53.54 s — faster at best, unstable in
+practice. The experiment was reverted; `O_DIRECT` stays until the shard is no
+longer mapped while it is read.
