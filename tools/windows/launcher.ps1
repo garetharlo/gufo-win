@@ -68,13 +68,14 @@ function Get-PortOwner([int]$Port) {
 
 function Start-Plan($Plan) {
   $gufoArgs = @($Plan.Args)
-  $port = [int]$Plan.Port
+  $port = 8888
+  # -Last replays a saved plan; older ones still carry another port.
+  $portIndex = [array]::IndexOf($gufoArgs, "--port")
+  if ($portIndex -ge 0) { $gufoArgs[$portIndex + 1] = "$port" }
   $owner = Get-PortOwner $port
   if ($owner) {
-    for ($free = $port + 1; $free -lt $port + 20 -and (Get-PortOwner $free); $free++) { }
-    Write-Host "port $port is taken by $owner, using $free" -ForegroundColor Yellow
-    $gufoArgs[[array]::IndexOf($gufoArgs, "--port") + 1] = "$free"
-    $port = $free
+    Write-Host "port $port is taken by $owner (gufo only serves on $port)" -ForegroundColor Yellow
+    if (-not $DryRun) { exit 1 }
   }
   $running = @(Get-Process -Name "gufo" -ErrorAction SilentlyContinue)
   if ($running.Count -gt 0 -and -not $DryRun) {

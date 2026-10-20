@@ -217,7 +217,12 @@ public:
   [[nodiscard]] std::size_t AllocatedBytes() const noexcept;
   void ConfigureVision(std::shared_ptr<const qwen::vision::Prompt> prompt);
   /// A new request reusing cached context starts its own acceptance history.
-  void ResetDraftPolicy() noexcept { draft_length_.Reset(); }
+  void ResetDraftPolicy() noexcept {
+    draft_length_.Reset();
+    // A fully reused prompt skips SyncImpl; it still starts a new request, so
+    // do not inherit a copy cursor or widen its first step.
+    lookup_.BeginRequest();
+  }
 
   struct SpeculativeStats {
     std::uint64_t cycles{0};
@@ -232,7 +237,7 @@ public:
   }
 
   /// Compatibility version; bump on payload or inference arithmetic changes.
-  static constexpr std::uint32_t kSnapshotPayloadVersion = 14;
+  static constexpr std::uint32_t kSnapshotPayloadVersion = 15;
   /// Bytes a snapshot of the current context occupies.
   [[nodiscard]] std::uint64_t SnapshotBytes() const;
   /// Captures the whole context (tokens, device caches and recurrent
@@ -276,8 +281,9 @@ private:
                      std::string* error_msg, bool defer_head = false,
                      std::optional<std::uint32_t> batch_drafts = {});
   static void AppendDraft(PendingDecode& pending);
-  /// Prompt lookup: appends copied proposals up to `cap` chain tokens.
-  bool AppendLookup(PendingDecode& pending, std::size_t cap);
+  /// Appends copies within the prepared budget, stopping at EOG when enabled.
+  bool AppendLookup(PendingDecode& pending, bool stop_at_eos,
+                    std::size_t minimum = 1);
   bool FinishDecode(const DecodeRequest& request, const PendingDecode& pending,
                     std::string* error_msg);
 

@@ -108,6 +108,7 @@ struct SessionSnapshotHeader {
   std::uint32_t image_identity_bytes;
   std::uint32_t policy_concurrency;
   std::uint32_t reserved{0};
+  PromptLookup::State lookup;
 };
 static_assert(std::is_trivially_copyable_v<SessionSnapshotHeader>);
 
@@ -415,6 +416,7 @@ std::unique_ptr<SessionSnapshot> Session::SaveSnapshot(
       .draft_policy = draft_length_.State(),
       .image_identity_bytes = static_cast<std::uint32_t>(identity.size()),
       .policy_concurrency = model_->DecodeConcurrency(),
+      .lookup = lookup_.Save(),
   };
   std::memcpy(out, &header, sizeof(header));
   out += sizeof(header);
@@ -513,7 +515,13 @@ bool Session::RestoreSnapshot(std::span<const std::uint8_t> payload,
     return false;
   }
   tokens_ = std::move(tokens);
-  lookup_.Clear();
+  // Reject malformed lookup state outright (it would misalign the cursor).
+  if (!PromptLookup::Valid(header.lookup, tokens_.size())) {
+    Reset();
+    AssignError(error_msg, "session snapshot lookup state is inconsistent");
+    return false;
+  }
+  lookup_.Restore(header.lookup);
   logits_ = std::move(logits);
   anchor_candidates_valid_ = false;
   hidden_base_ = info.position - info.hidden_rows;
@@ -654,6 +662,9 @@ bool Session::Sync(std::span<const std::int32_t> prompt,
     AssignError(error_msg, "prompt exceeds the session context");
     return false;
   }
+  // Every Sync starts a new request: reset the copy cursor so the first
+  // speculative step does not copy across the request boundary.
+  lookup_.BeginRequest();
   if (!valid_)
     Reset();
   // Recurrent state cannot be rewound, so any divergence restarts the
@@ -753,6 +764,10 @@ struct Session::PendingDecode {
   std::int32_t draft{0};
   /// Trailing chain tokens copied by prompt lookup (after the MTP drafts).
   std::uint32_t lookup{0};
+  /// Copy budget for this cycle (0 disables copying for the step).
+  std::size_t lookup_cap{0};
+  /// Committed index the copied tokens continue.
+  std::size_t lookup_start{0};
 };
 
 namespace {
@@ -826,18 +841,30 @@ void Session::AppendDraft(PendingDecode& pending) {
   pending.chain.push_back(pending.draft);
 }
 
-bool Session::AppendLookup(PendingDecode& pending, std::size_t cap) {
+bool Session::AppendLookup(PendingDecode& pending, bool stop_at_eos,
+                           std::size_t minimum) {
+  const auto cap = pending.lookup_cap;
   if (pending.chain.size() >= cap) {
     return false;
   }
-  const auto match = lookup_.Find(tokens_, pending.chain);
+  if (stop_at_eos && model_->IsStopToken(pending.chain.back())) {
+    return false;
+  }
+  const auto match =
+      lookup_.Find(tokens_, pending.chain,
+                   pending.sampled ? PromptLookup::kSampledMinMatch
+                                   : PromptLookup::kMinMatch);
   if (match.length == 0) {
     return false;
   }
-  const std::size_t count =
-      std::min(cap - pending.chain.size(), tokens_.size() - match.start);
-  for (std::size_t i = 0; i < count; ++i) {
-    const std::int32_t token = tokens_[match.start + i];
+  const std::size_t available =
+      std::min(cap - pending.chain.size(),
+               lookup_.IndexedTokens() - match.start);
+  if (available < minimum)
+    return false;
+  std::size_t count = 0;
+  for (; count < available; ++count) {
+    const std::int32_t token = tokens_[match.start + count];
     pending.chain.push_back(token);
     if (pending.sampled) {
       // A point-mass proposal: accepted with the target's p(token), and a
@@ -850,8 +877,13 @@ bool Session::AppendLookup(PendingDecode& pending, std::size_t cap) {
       proposal.probability = 1.0F;
       pending.proposals.push_back(proposal);
     }
+    if (stop_at_eos && model_->IsStopToken(token)) {
+      ++count;
+      break;
+    }
   }
   pending.lookup = static_cast<std::uint32_t>(count);
+  pending.lookup_start = match.start;
   pending.width = pending.chain.size();
   return count != 0;
 }
@@ -957,16 +989,29 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   }
   // ModelOptions::prompt_lookup (single session): after each kept MTP
   // draft, a long enough match in the committed tokens fills the rest of
-  // the chain up to the verify width and ends drafting.
+  // the chain up to the verify width and ends drafting. A request's first
+  // speculative step copies nothing (see PromptLookup), so scheduling a
+  // peer cannot change a sampled request's proposals or RNG sequence.
   const bool lookup =
       model_->options_.prompt_lookup && !batch_drafts && !defer_head;
   if (lookup) {
-    lookup_.Extend(tokens_);
+    pending->lookup_cap = lookup_.Step(base) ? cap : 0;
+    if (pending->lookup_cap != 0) {
+      lookup_.Extend(tokens_, sampled);
+    }
   }
   if (!defer_head) {
+    if (lookup && !sampled && AppendLookup(*pending, request.stop_at_eos, 3)) {
+      // Greedy copies can supply the whole chain without the neural head.
+      return true;
+    }
     float alive = 1.0F;
     while (pending->chain.size() < width) {
       AppendDraft(*pending);
+      if (request.stop_at_eos && model_->IsStopToken(pending->chain.back())) {
+        pending->width = pending->chain.size();
+        break;
+      }
       if (survival && !pending->proposals.empty()) {
         const std::size_t depth = pending->proposals.size() - 1;
         alive *= MtpAcceptEstimate(depth, pending->proposals.back());
@@ -978,7 +1023,7 @@ bool Session::PrepareDecode(const DecodeRequest& request,
           break;
         }
       }
-      if (lookup && AppendLookup(*pending, cap)) {
+      if (lookup && AppendLookup(*pending, request.stop_at_eos, 1)) {
         break;
       }
       if (pending->chain.size() < width &&
@@ -1143,10 +1188,20 @@ bool Session::FinishDecode(const DecodeRequest& request,
   const std::uint32_t mtp_accepted = std::min(keep - 1, mtp_drafts);
   stats_.lookup += pending.lookup;
   stats_.lookup_accepted += keep - 1 - mtp_accepted;
+  if (pending.lookup != 0) {
+    // The copied text continues at lookup_start + accepted; a mostly
+    // rejected copy keeps the next match long.
+    lookup_.Observe(pending.lookup_start, pending.lookup,
+                    keep - 1 - mtp_accepted);
+  }
+  // A fully accepted neural tail is hidden behind the copies: observe the
+  // full kept length so the controller does not over-draft after copies.
+  const bool mtp_all = mtp_accepted == mtp_drafts;
+  const std::uint32_t observed = mtp_all ? keep - 1 : mtp_accepted;
   // A target stop ends the request; it does not classify the remaining
   // proposals as failed predictions.
-  draft_length_.Observe(mtp_accepted, result->stop ? mtp_accepted : mtp_drafts,
-                        base);
+  draft_length_.Observe(observed,
+                        result->stop || mtp_all ? observed : mtp_drafts, base);
 
   // The next call knows the next sampled anchor. Defer draft catch-up until
   // then, retaining this session's target hidden rows across interleaving.
@@ -1409,6 +1464,26 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
     if (!bodies.empty() && !exec.MtpForwardBatch(bodies, error_msg))
       return false;
   }
+  // Lookup-only chains (no neural drafts) are longer than the shared width;
+  // trim them so one batch verify stays shape-compatible with the rest.
+  if (batch_drafts) {
+    const bool mixed_lookup = std::ranges::any_of(pending, [](const auto& p) {
+      return !p.chain.empty() && p.lookup == 0;
+    });
+    if (mixed_lookup) {
+      for (auto& p : pending) {
+        if (p.lookup == 0)
+          continue;
+        const auto cap =
+            std::max<std::size_t>(1 + *batch_drafts, (p.lookup_cap + 1) / 2);
+        if (p.chain.size() > cap) {
+          p.lookup -= static_cast<std::uint32_t>(p.chain.size() - cap);
+          p.chain.resize(cap);
+          p.width = cap;
+        }
+      }
+    }
+  }
   std::vector<rocm::Executor::BatchItem> items;
   for (std::size_t i = 0; i < requests.size(); ++i) {
     const auto& r = requests[i];
@@ -1454,7 +1529,11 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
       r.outcome->error = exception.what();
     }
   }
-  if (batch_drafts && items.size() == requests.size() &&
+  const bool used_lookup =
+      std::ranges::any_of(pending, [](const auto& p) { return p.lookup != 0; });
+  if (used_lookup)
+    policy.SkipCycle();
+  if (!used_lookup && batch_drafts && items.size() == requests.size() &&
       std::ranges::all_of(requests,
                           [](const auto& r) { return r.outcome->completed; })) {
     const auto ms = std::chrono::duration<float, std::milli>(

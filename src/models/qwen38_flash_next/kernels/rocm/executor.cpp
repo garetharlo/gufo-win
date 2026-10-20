@@ -490,7 +490,6 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
       error_msg);
   s.attn_counts = Alloc<std::uint32_t>(a, kVecBatch, error_msg);
   if (c.ple_layer >= 0) {
-    s.ple_emb = f32(T * c.PleEmbeddingDim());
     // PLE finishes before this layer's mixer/SSM. Its gate consumes key
     // and query before normalization/convolution reuse those two buffers.
     // The gated input stays separate until PleInject consumes both outputs.
@@ -503,8 +502,14 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     s.ple_history_scratch =
         f32(static_cast<std::size_t>(c.PleConvHistory()) * hc_dim);
     void* pinned = nullptr;
-    if (!Check(hipHostMalloc(&pinned, T * c.PleEmbeddingDim() * sizeof(float)),
-               "pinned n-gram buffer", error_msg)) {
+    // Mapped memory: the n-gram rows are read directly by the device,
+    // without an upload copy.
+    if (!Check(hipHostMalloc(&pinned, T * c.PleEmbeddingDim() * sizeof(float),
+                             hipHostMallocMapped | hipHostMallocCoherent),
+               "pinned n-gram buffer", error_msg) ||
+        !Check(hipHostGetDevicePointer(
+                   reinterpret_cast<void**>(&s.ple_emb), pinned, 0),
+               "mapped n-gram buffer", error_msg)) {
       return nullptr;
     }
     e->host_emb_ = static_cast<float*>(pinned);
@@ -1623,13 +1628,7 @@ bool Executor::Ple(const DeviceLayer& l, Session& session, std::uint32_t n,
                    float* res, bool speculative, std::string* error_msg,
                    bool embeddings_ready) const {
   const Config& c = config();
-  const std::size_t emb_count =
-      static_cast<std::size_t>(n) * c.PleEmbeddingDim();
-  if (!embeddings_ready &&
-      (!WaitPle(error_msg) ||
-       !CopyPinned(host_emb_, s_.ple_emb, emb_count * sizeof(float),
-                   hipMemcpyHostToDevice, stream_, "n-gram upload",
-                   error_msg))) {
+  if (!embeddings_ready && !WaitPle(error_msg)) {
     return false;
   }
   const std::uint32_t hc_dim = c.HcDim();
@@ -1855,12 +1854,13 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
     const std::uint32_t blocks =
         (score_context + c.compress_ratio - 1) / c.compress_ratio;
     const std::uint32_t max_blocks = (blocks + 31) / 32 * 32;
-    const auto select_chunk = static_cast<std::uint32_t>(std::min(
-        std::size_t{512}, std::bit_floor(select_score_floats_ / max_blocks)));
-    // Catch-up consumes only the final attention tile. Keep all its query
-    // masks (sparse attention packs four queries; dense tiles hold sixteen)
-    // but avoid scoring the unused prefix against the complete context.
-    const auto first_query = last_only ? (n_tokens - 1) / 16 * 16 : 0U;
+    // Query rows are independent; rounding down to a power of two wasted
+    // up to half the bounded scratch and doubled launches above 160K.
+    const auto select_chunk = static_cast<std::uint32_t>(
+        std::min(std::size_t{512}, select_score_floats_ / max_blocks));
+    // Catch-up consumes only the final attention tile. Cover its masks even
+    // when the dense/sparse boundary shifts the four-query sparse groups.
+    const auto first_query = last_only && n_tokens > 16 ? n_tokens - 16 : 0U;
     for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk) {
       const std::uint32_t n = std::min(select_chunk, n_tokens - t0);
       // Batches wider than kVecBatch are never captured, so the host
@@ -2279,6 +2279,17 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
   }
   if (speculative && !EnsureRollback(session, n - 1, error_msg))
     return false;
+  // Failed eager/captured work can still be reading pinned inputs. Drain it
+  // before another request reuses those buffers; successful forwards already
+  // synchronize below and need no additional wait.
+  struct PinnedInputGuard {
+    hipStream_t stream;
+    bool completed{false};
+    ~PinnedInputGuard() {
+      if (!completed)
+        (void)hipStreamSynchronize(stream);
+    }
+  } pinned_inputs{stream_};
   ++session.mutation_epoch_;
   session.spec_base_ = start_pos;
   session.spec_tokens_ = speculative ? n : 0;
@@ -2393,6 +2404,7 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
     Tl().Host(Timeline::kSynced);
     Tl().MaybeReport(stream_);
   }
+  pinned_inputs.completed = true;
   // The pass has completed: its candidate lists are on the host.
   verify_candidates_ready_ = candidates ? n_logits : 0;
   if (n_logits > 0 && logits != nullptr) {
@@ -3246,11 +3258,20 @@ bool Executor::MtpBody(Session& session, std::uint32_t n, std::uint32_t pos,
               1, c.rms_eps, stream_);
   // The hidden input: kept trunk rows from `hidden_row`, or the block's
   // own carried residual.
-  MtpHidden(hidden_source ? hidden_source : session.mtp_.target_hidden,
-            session.mtp_.h, &session.control_->hidden_row, s_.mtp_h, n, hc_dim,
-            stream_);
+  const float* hidden = s_.mtp_h;
+  if (hidden_source && control_host_->hidden_row >= 0) {
+    // Eager catch-up can normalize the trunk rows directly. Graphs use the
+    // device-selected source below because their hidden-row index can change
+    // on replay. Neither path modifies the trunk residual.
+    hidden = hidden_source +
+             static_cast<std::size_t>(control_host_->hidden_row) * hc_dim;
+  } else {
+    MtpHidden(hidden_source ? hidden_source : session.mtp_.target_hidden,
+              session.mtp_.h, &session.control_->hidden_row, s_.mtp_h, n,
+              hc_dim, stream_);
+  }
   // Unlike the HC mixers, this normalization spans the complete HC * H row.
-  RmsNormRows(s_.mtp_h, l.nextn_hnorm.f32(), s_.mtp_h, n, hc_dim, 1, c.rms_eps,
+  RmsNormRows(hidden, l.nextn_hnorm.f32(), s_.mtp_h, n, hc_dim, 1, c.rms_eps,
               stream_);
   if (trace && !copy_trace(s_.mtp_h + final_row, trace->normalized_hidden))
     return false;
