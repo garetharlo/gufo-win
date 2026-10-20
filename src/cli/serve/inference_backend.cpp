@@ -2423,8 +2423,15 @@ public:
         {max_input_tokens, prompt.size() - offset, model_->PrefillCapacity()});
     const std::size_t next_position = offset + consumed;
     const auto prefix = QwenFlashNextEngineTokens(prompt.first(next_position));
+    // The next step most likely takes the same budget; its n-gram rows are
+    // read during this one and used only if it does.
+    const std::size_t after = prompt.size() - next_position;
+    const auto next = QwenFlashNextEngineTokens(prompt.subspan(
+        next_position,
+        std::min<std::size_t>(
+            {max_input_tokens, after, model_->PrefillCapacity()})));
     std::string error;
-    if (!qfn.session().Sync(prefix, &error)) {
+    if (!qfn.session().Sync(prefix, &error, next)) {
       qfn.set_position(0);
       throw std::runtime_error("Qwen3.8-Flash-Next prefill failed: " + error);
     }

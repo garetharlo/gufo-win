@@ -367,6 +367,8 @@ public:
     [[nodiscard]] double cache_restore_ms() const noexcept;
     [[nodiscard]] bool cache_disk_hit() const noexcept;
     [[nodiscard]] std::size_t prompt_tokens() const noexcept;
+    /// Prompt tokens already in model state, restored or prefilled.
+    [[nodiscard]] std::size_t prefill_position() const noexcept;
     [[nodiscard]] bool prefill_complete() const noexcept;
 
     void PrepareBatchExecution();
