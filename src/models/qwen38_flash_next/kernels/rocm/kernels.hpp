@@ -138,6 +138,14 @@ bool HcCombineF16(float* res, const float* block_out, const float* inject,
                   std::uint32_t streams, float eps, hipStream_t stream,
                   float* defer_w = nullptr, float* inject_out = nullptr,
                   const float* inject_w = nullptr);
+/// HcCombine that also writes the norm's unpadded Q8_1 rows to `xn_q8`
+/// (`qfn_mmq_q8_1_bytes(tokens, streams * hidden)`), byte-identical to
+/// quantizing `xn` afterwards. False (nothing launched) without a gamma or
+/// when hidden % 32 != 0.
+bool HcCombineQ8_1(float* res, const float* block_out, const float* inject,
+                   std::uint32_t inject_parts, const float* gamma, float* xn,
+                   void* xn_q8, std::uint32_t n_tokens, std::uint32_t hidden,
+                   std::uint32_t streams, float eps, hipStream_t stream);
 /// Applies the residual update a deferring HcCombineF16 left out (four
 /// streams), with the same arithmetic.
 void HcApplyDeferred(float* res, const float* block_out, const float* w,
@@ -178,6 +186,10 @@ bool SwigluQ8Tiled(const float* gate, const float* up, void* out_q8,
 /// x[i] *= sigmoid(g[i]).
 void SigmoidMul(float* x, const float* g, std::size_t count,
                 hipStream_t stream);
+/// SigmoidMul that also writes x's unpadded Q8_1 rows; false (nothing
+/// launched) unless count % 32 == 0.
+bool SigmoidMulQ8_1(float* x, const float* g, std::size_t count, void* x_q8,
+                    hipStream_t stream);
 
 /// out[t][m] = sum_k W[m][k] * x[t][k] for F32/BF16/F16 weights; meant for
 /// the narrow projections (routers, alpha/beta, indexer, inject) that the
@@ -339,7 +351,8 @@ void PleInject(float* res, const float* gated, const float* conv,
 /// stacked [qkv|z] projection feeds both without unpacking. A non-null
 /// `out_q8` receives the rows quantized into the W8A8 tiled layout
 /// (K = v_heads * d) instead of `out`. With null `out_q8`, a non-null
-/// `out_half` receives F16 rows instead of `out`. `convolved` consumes
+/// `out_half` receives F16 rows instead of `out`, and a non-null `out_q8_1`
+/// also receives the F32 rows' unpadded Q8_1 rows. `convolved` consumes
 /// convolution rows already in conv_scratch; it requires null speculative
 /// snapshots.
 void GatedDeltaNet(const float* qkv, std::uint32_t qkv_stride, const float* z,
@@ -352,7 +365,7 @@ void GatedDeltaNet(const float* qkv, std::uint32_t qkv_stride, const float* z,
                    std::uint32_t k_heads, std::uint32_t v_heads,
                    std::uint32_t d, std::uint32_t kernel, bool row_split,
                    bool convolved, float eps, hipStream_t stream,
-                   __half* out_half = nullptr);
+                   __half* out_half = nullptr, void* out_q8_1 = nullptr);
 
 /// Private rows for one request in a decode batch. Scratch regions and all
 /// recurrent/history/rollback buffers must be disjoint between requests.
