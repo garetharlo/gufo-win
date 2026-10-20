@@ -831,6 +831,7 @@ struct Session::PendingDecode {
   /// Committed index the copied tokens continue.
   std::size_t lookup_start{0};
   bool draft_subset{false};  ///< this cycle drafts through the subset head
+  std::uint32_t policy_concurrency{0};
 };
 
 namespace {
@@ -954,7 +955,8 @@ bool Session::AppendLookup(PendingDecode& pending, bool stop_at_eos,
 bool Session::PrepareDecode(const DecodeRequest& request,
                             PendingDecode* pending, std::string* error_msg,
                             bool defer_head,
-                            std::optional<std::uint32_t> batch_drafts) {
+                            std::optional<std::uint32_t> batch_drafts,
+                            std::uint32_t occupancy) {
   const auto max_tokens = request.max_tokens;
   auto& sampler = *request.sampler;
   auto* result = request.result;
@@ -988,15 +990,23 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   const bool allow_subset =
       MtpDraftSubsetAllowed(sampler.config().uses_random_sampling(), unmodified,
                             concurrency, batch_drafts.has_value());
+  // Unplanned greedy cycles are priced at the requests decoding now. Sampled
+  // ones keep the configured concurrency so a seeded request replays the same
+  // widths, and a planned batch keeps the row its plan used.
+  pending->policy_concurrency =
+      sampler.config().uses_random_sampling() || batch_drafts.has_value()
+          ? 0
+          : occupancy;
   const std::size_t width =
       MtpEnabled() && cap > 1
           ? 1 + (batch_drafts ? std::min<std::uint32_t>(*batch_drafts, cap - 1)
-                 : survival   ? std::min<std::uint32_t>(
-                                  kMaxMtpDraftTokens,
-                                  static_cast<std::uint32_t>(cap - 1))
-                            : draft_length_.Choose(
-                                  static_cast<std::uint32_t>(cap - 1),
-                                  static_cast<std::uint32_t>(tokens_.size())))
+                  : survival   ? std::min<std::uint32_t>(
+                                   kMaxMtpDraftTokens,
+                                   static_cast<std::uint32_t>(cap - 1))
+                              : draft_length_.Choose(
+                                    static_cast<std::uint32_t>(cap - 1),
+                                    static_cast<std::uint32_t>(tokens_.size()),
+                                    pending->policy_concurrency))
           : cap;
   if (width == 0) {
     result->stop = true;
@@ -1285,7 +1295,8 @@ bool Session::FinishDecode(const DecodeRequest& request,
   // A target stop ends the request; it does not classify the remaining
   // proposals as failed predictions.
   draft_length_.Observe(observed,
-                        result->stop || mtp_all ? observed : mtp_drafts, base);
+                        result->stop || mtp_all ? observed : mtp_drafts, base,
+                        pending.policy_concurrency);
 
   // The next call knows the next sampled anchor. Defer draft catch-up until
   // then, retaining this session's target hidden rows across interleaving.
@@ -1502,8 +1513,9 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
   for (std::size_t i = 0; i < requests.size(); ++i) {
     const auto& r = requests[i];
     try {
-      if (!r.session->PrepareDecode(r, &pending[i], &r.outcome->error, true,
-                                    batch_drafts))
+      if (!r.session->PrepareDecode(
+              r, &pending[i], &r.outcome->error, true, batch_drafts,
+              static_cast<std::uint32_t>(requests.size())))
         pending[i] = {};
     } catch (const std::exception& exception) {
       r.outcome->error = exception.what();
