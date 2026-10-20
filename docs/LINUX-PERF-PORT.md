@@ -186,9 +186,13 @@ Acceptance: first-prompt latency drops; plans still exact-shape.
 
 ## Tier 2 — decode wins
 
-### [ ] #613 — copy repeated context into MTP drafts (prompt lookup)
+### [x] #613 — copy repeated context into MTP drafts (prompt lookup)
 
-Upstream: `8497711`. Upstream Linux measurements:
+Implemented in the fork before upstream (`ae59401`): `prompt_lookup.hpp`
+(greedy/sampled gates, resume-after-edit, snapshot state), engine/CLI/serve
+wiring, tests. Upstream `8497711` is the follow-up of this work. Remaining
+delta: upstream defaults it on for single-session MTP; the fork keeps it
+opt-in (`engine.hpp` `prompt_lookup = false`). Upstream Linux measurements:
 
 - rewrite/copy agent requests: **+40–46% decode** (e.g. 69.8 → 99.6 tok/s)
 - 25k follow-up aggregate case: **+27%**
@@ -450,7 +454,7 @@ Measured, same session, `gufo bench -p 2048 -n 16 -d 0,32768 -r 3`:
 to the pre-patch binary. Upstream reports the same direction and size (+1.2%
 d0, +1.8% at 128K).
 
-### [~] #485 — accelerate prefill and MTP catch-up
+### [x] #485 — accelerate prefill and MTP catch-up
 
 Upstream: `fd747a5`. Upstream matched HTTP increments: pp2048 d0 MTP
 **1581.01 → 1623.99 tok/s**, d32K **1490.59 → 1524.10**, d128K AR
@@ -496,11 +500,24 @@ stack, so checkpoint code is dropped from every slice.
   `HcMixF16Gemm` argument check: measured +0.5% pp2048 d0, +0.1% d32K, tg
   neutral, greedy haiku and `--validate-prefill 64` (rmse 0.42) byte-identical
   to the GDN build.
-- [ ] PLE direct mapped n-gram input (`hipHostMallocMapped | Coherent`,
+- [x] PLE direct mapped n-gram input (`hipHostMallocMapped | Coherent`,
   `hipHostGetDevicePointer` into `s.ple_emb`, no F32 allocation or uploads).
-- [ ] `DenseBatch` 32-row chunk split for 64+ rows.
-- [ ] MTP catch-up sparse-boundary fix (`hidden_source` +
-  `control_host_->hidden_row`, `Attention` `last`/`dense_rows` flags).
+- [ ] ~~`DenseBatch` 32-row chunk split for 64+ rows.~~ Fork already splits at
+  `kDecodeRows=8`; no port needed.
+- [x] MTP catch-up sparse-boundary fix (`hidden_source` +
+  `control_host_->hidden_row`, `Attention` `last`/`dense_rows` flags), plus
+  `PinnedInputGuard` syncing `stream_` on failed passes after
+  `EnsureRollback`.
+
+Remainder landed 2026-10-20 (PLE mapped buffer, selector
+`select_chunk = min(512, ...)` without `bit_floor`, `first_query =
+n_tokens - 16` for `last_only` — packed half2 loads and `sched_barrier`
+deliberately not ported, they caused the earlier −8% pp d128K rejection).
+Gates: `--validate-prefill 64` rmse 0.31 / cosine 0.99 / max 1.57; greedy
+haiku byte-identical. Interleaved A/B vs baseline (`-p 2048 -n 16 -d
+0,32768,131072 -r 2`): perf-neutral — pp2048 d0 1628/1628, d32K
+1401/1398, d128K 1323/1326, tg16 all within noise. Kept for the dropped
+PLE upload copy and the failure-path pinned-buffer race fix.
 
 GDN slice measured, same session, `gufo bench -p 2048 -n 16 -d 0,32768 -r 3`:
 
@@ -733,13 +750,33 @@ Windows fit: pure host code. Only matters for multimodal workloads.
 
 ## Cheap optional ports
 
-### [ ] #415 — skip vocabulary blocks that cannot change the sampled token
+### [x] #667 — store d*sum(q) as the q8_1 block sum
+
+Upstream: `86730bd` (post-review). `quantize_mmq_q8_1` stored the sum of the
+*pre-quantization* floats in the q8_1 block sum; consumers expecting the
+ggml contract (`d*sum(q)`) read a wrong second scale. Ported in the fork
+(`mmq/quantize.hip.cpp` `sumq` shuffle reduce, `kernels.hip.cpp`
+`XorLane` variant) with +179 lines of `routed_wmma_ops_test.cpp` checking
+expert dots against the q8_1 activations contract. Gates run with this in
+the #485-remainder binary (2026-10-20): `--validate-prefill 64` rmse
+0.31 / cosine 0.99 / max 1.57, greedy haiku byte-identical, A/B perf
+neutral. Kept as a correctness fix.
+
+### [x] #415 — skip vocabulary blocks that cannot change the sampled token
 
 Upstream: `b945d0a`. Sampler microbench: top-k 20 **8.4×**, top-k + presence
 **15×**; end-to-end **+1.2–3.6%** on sampled requests. Local
 `src/core/sampling.cpp` still scans every entry and binary-searches penalties.
 
 Windows fit: pure C++. Low risk. Greedy on GPU is unaffected.
+
+Ported 2026-10-20: block skip (kSkipBlock=64, BlockMaximum), lockstep penalty
+walk (`adjusted_at`/`for_each_adjusted`) in select_best/select_all/top-p.
+Verified: `logit_sampler_test` (compiled standalone with the release clang++
+against `src/core/sampling.cpp` — cpu-test preset still blocked by FindICU on
+this host) passes including the new `TestBlockSkippedTopKAgainstFullSort`;
+sampled A/B (t 0.8, top-k 64, top-p 0.95, seed 42, 120 tokens) byte-identical
+to baseline.
 
 ### [ ] #332 — GPU greedy penalties
 
@@ -753,11 +790,15 @@ Upstream: `93af45d`. Fewer disk writes/fsyncs on multi-turn chats. No
 decode/prefill gain. Trade-off: disk-only restore re-prefills up to 2,048
 tokens. Do it only if the disk cache is a measured bottleneck.
 
-### [ ] #499 — stage Qwen-Image weight uploads through pinned buffers
+### [x] #499 — stage Qwen-Image weight uploads through pinned buffers
 
 Upstream: `eb91daa`. Local `qwen_image_21/weights.cpp` uses `mmap`; staging
 through `hipHostMalloc` avoids the host page-pinning stall. This is a
-load/stall fix, not a decode speedup. Optional.
+load/stall fix, not a decode speedup. Ported 2026-10-20: `UploadMapped`
+(double-buffered 64 MB pinned staging, event-guarded reuse) replaces the
+direct `hipMemcpyAsync` from the file mapping in `Runtime::Weight`.
+Verified end-to-end: `serve image` + one 832×832 generation through the
+staging path (28.5 GB resident weights, no stall, valid PNG).
 
 ---
 

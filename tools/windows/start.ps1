@@ -65,12 +65,6 @@ function Get-PortOwner([int]$Port) {
   if ($process) { return "$($process.ProcessName) (PID $($process.Id))" }
   "PID $($listener.OwningProcess)"
 }
-function Get-FreePort([int]$Port) {
-  for ($candidate = $Port; $candidate -lt $Port + 20; $candidate++) {
-    if (-not (Get-PortOwner $candidate)) { return $candidate }
-  }
-  $Port
-}
 function Get-Source($Record) {
   if ($Record.Repo) { return $Record.Repo }
   $Record.Path | Split-Path
@@ -130,15 +124,14 @@ if ((Test-Path $exe) -and (Get-Command git -ErrorAction SilentlyContinue) -and (
 # --- Launch (shared by -Last and the menu) ------------------------------------
 function Start-Gufo($Plan) {
   $gufoArgs = @($Plan.Args)
-  $port = [int]$Plan.Port
+  $port = 8888
+  # -Last replays a saved plan; older ones still carry another port.
+  $portIndex = [array]::IndexOf($gufoArgs, "--port")
+  if ($portIndex -ge 0) { $gufoArgs[$portIndex + 1] = "$port" }
   $owner = Get-PortOwner $port
   if ($owner) {
-    $free = Get-FreePort ($port + 1)
-    Write-Host "port $port is taken by $owner" -ForegroundColor Yellow
-    if (-not (Ask-YesNo "Use port $free instead?" $true)) { exit 1 }
-    $index = [array]::IndexOf($gufoArgs, "--port")
-    $gufoArgs[$index + 1] = "$free"
-    $port = $free
+    Write-Host "port $port is taken by $owner (gufo only serves on $port)" -ForegroundColor Yellow
+    if (-not $DryRun) { exit 1 }
   }
   $running = @(Get-Process -Name "gufo", "gufo-a3b" -ErrorAction SilentlyContinue)
   foreach ($process in $running) {
@@ -398,7 +391,7 @@ $state = @{
   Context = $base.Context
   Sessions = 1
   Think = "on"
-  Port = Get-FreePort 8080
+  Port = 8888
   Host = "127.0.0.1"
   Draft = $(if ($mode.Draft) { $base.Drafts[0] } else { $null })
   Log = $false
@@ -450,14 +443,12 @@ function Edit-Plan {
   if ($canSessions) {
     $state.Sessions = Ask-Number "Concurrent sessions (1-8; each holds its own KV cache)" $state.Sessions 1 8
   }
-  $state.Think = Ask-Choice "Thinking on or off by default" @("on", "off") $state.Think
-  if ($state.Draft -and $base.Drafts.Count -gt 1) {
+  $state.Think = Ask-Choice "Thinking on or off by default" @("on", "off") $state.Think  if ($state.Draft -and $base.Drafts.Count -gt 1) {
     Write-Host "Draft file:"
     for ($i = 0; $i -lt $base.Drafts.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $base.Drafts[$i].Path) }
     $current = [array]::IndexOf($base.Drafts, $state.Draft) + 1
     $state.Draft = $base.Drafts[[int](Ask-Choice "Draft" @(1..$base.Drafts.Count | ForEach-Object { "$_" }) "$current") - 1]
   }
-  $state.Port = Ask-Number "Port" $state.Port 1 65535
   $network = Ask-Choice "Who may connect: 1) this PC only  2) the local network" @("1", "2") $(if ($state.Host -eq "0.0.0.0") { "2" } else { "1" })
   $state.Host = if ($network -eq "2") { "0.0.0.0" } else { "127.0.0.1" }
   $state.Log = Ask-YesNo "Also save the log to a file" $state.Log

@@ -807,15 +807,8 @@ bool Executor::ForwardBatch(std::span<const BatchItem> items,
       if (!AnyActive(items))
         return true;
       const auto& l = layers[il];
-      if (c.IsPleLayer(il)) {
-        if (!WaitPle(error) ||
-            !Check(hipMemcpyAsync(base.ple_emb, host_emb_,
-                                  static_cast<std::size_t>(rows) *
-                                      c.PleEmbeddingDim() * sizeof(float),
-                                  hipMemcpyHostToDevice, stream_),
-                   error)) {
-          return false;
-        }
+      if (c.IsPleLayer(il) && !WaitPle(error)) {
+        return false;
       }
       for (std::size_t i = 0; i < items.size(); ++i) {
         const auto& item = items[i];
