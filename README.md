@@ -105,9 +105,9 @@ survival stopping, the Latin draft vocabulary, prompt lookup and temperature
 What this fork is about, in one list:
 
 - **Native Windows on Strix Halo.** Build and run Gufo directly on Windows 11
-  against AMD's TheRock ROCm — no WSL, no containers — and publish prebuilt
-  release zips so a working server is unpack-and-run from a fresh Strix Halo
-  machine.
+  against AMD's TheRock ROCm — no WSL, no containers. Today that means building
+  from source below; prebuilt release zips are planned but not published yet,
+  so the Releases link will 404 until the first one lands.
 - **Stay close to upstream.** Port upstream gufo's fixes and optimizations as
   they land, and keep the Windows path behaviorally identical to it: bit-exact
   logit checks and seeded-decode byte-identity are the gate for accepting any
