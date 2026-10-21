@@ -13,7 +13,6 @@ function(add_qwen38_flash_next_test name library labels)
 endfunction()
 
 add_qwen38_flash_next_test(config gufo_qwen38_flash_next "cpu")
-add_qwen38_flash_next_test(continuation_layout gufo_qwen38_flash_next "cpu")
 add_qwen38_flash_next_test(ngram gufo_qwen38_flash_next "cpu")
 add_qwen38_flash_next_test(mtp_sampling gufo_core "cpu")
 add_qwen38_flash_next_test(draft_vocab gufo_core "cpu")
@@ -33,27 +32,16 @@ if (ENGINE_ENABLE_HIP)
   add_executable(qwen38_flash_next_session_test EXCLUDE_FROM_ALL session_test.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_cache.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_disk_store.cpp
-    ${PROJECT_SOURCE_DIR}/src/cli/serve/component_text_cache.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/text_model_runner.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/text_generation_scheduler.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/inference_backend.cpp)
   target_link_libraries(qwen38_flash_next_session_test PRIVATE gufo_logging
     gufo_qwen38_flash_next gufo_deepseek_v4_flash gufo_cache_hip hip::host)
-  add_executable(qwen38_flash_next_snapshot_test EXCLUDE_FROM_ALL snapshot_test.cpp
-    device_headroom_fault.cpp)
+  add_executable(qwen38_flash_next_snapshot_test EXCLUDE_FROM_ALL snapshot_test.cpp)
   target_link_libraries(qwen38_flash_next_snapshot_test PRIVATE
     gufo_qwen38_flash_next ${CMAKE_DL_LIBS})
   add_custom_target(qwen38_flash_next_model_tests
     DEPENDS qwen38_flash_next_session_test qwen38_flash_next_snapshot_test)
-
-  add_executable(qwen38_flash_next_dense_gemm_bench EXCLUDE_FROM_ALL
-    dense_gemm_bench.cpp)
-  target_link_libraries(qwen38_flash_next_dense_gemm_bench PRIVATE
-    gufo_qwen38_flash_next hip::host)
-
-  add_executable(qwen38_flash_next_attn_bench EXCLUDE_FROM_ALL attn_bench.cpp)
-  target_link_libraries(qwen38_flash_next_attn_bench PRIVATE
-    gufo_qwen38_flash_next hip::host)
 
   add_executable(qwen38_flash_next_gpu_probe EXCLUDE_FROM_ALL gpu_probe.cpp
     mtp_audit.cpp)

@@ -96,6 +96,12 @@ bool MatrixRows(std::uint32_t rows) {
 bool ExpertMatrixRows(std::uint32_t rows) {
   return prefill_phase || rows > 4 * kVecBatch;
 }
+/// Prefill passes wider than a vector batch take the fused projections and
+/// the paired routed expert tiles: they win from 9 rows up to the full chunk.
+/// Decode and verification batches keep their single-token arithmetic.
+bool WidePrefill(std::uint32_t rows) {
+  return prefill_phase && rows > kVecBatch;
+}
 
 /// Whether mmq's Q8_1 rows of width k carry no padding, so a producer's
 /// contiguous element order is the layout.
@@ -1270,9 +1276,9 @@ bool Executor::RouteHints(std::uint32_t n_tokens,
   routed_max_rows_ = std::max<std::uint32_t>(1, max_rows);
   routed_n_tiles_ = n_tiles;
   // Append the 64-token map for gate/up and eligible down projections.
-  // Wide expert buckets also get a 128-token gate/up map: it amortizes
+  // Prefill expert buckets also get a 128-token gate/up map: it amortizes
   // weight decoding, while short buckets retain the cheaper 64-token tile.
-  if (n_tokens >= 1024 && routed_tile_rows_ == kRoutedTileRowsWide) {
+  if (WidePrefill(n_tokens)) {
     for (std::uint32_t e = 0; e < c.num_experts; ++e) {
       const std::uint32_t padded = (counts_host_[e] + 15u) / 16u * 16u;
       for (std::uint32_t j = 0; j < (padded + 63u) / 64u; ++j)
@@ -1888,7 +1894,7 @@ bool Executor::LinearAttention(const DeviceLayer& l, Session::LinearState& s,
   if (!l.ssm_in.empty()) {
     // Wide prefill convolves QKV in the projection's LDS tile. The raw
     // boundary rows remain available for the rolling history update.
-    if (!projections_ready && !speculative && n_tokens >= 1024 &&
+    if (!projections_ready && !speculative && WidePrefill(n_tokens) &&
         n_tokens <= options_.max_batch && DenseF16Route(l.ssm_in, n_tokens)) {
       PrepareHalfInput(x, n_tokens, l.ssm_in.cols);
       convolved = DenseF16SsmGemm(
@@ -1984,7 +1990,7 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
   bool prepared = false;
   if (!l.attn_qkv.empty()) {
     const bool fused_projection =
-        !projections_ready && n_tokens >= 1024 &&
+        !projections_ready && WidePrefill(n_tokens) &&
         n_tokens <= options_.max_batch && DenseF16Route(l.attn_qkv, n_tokens) &&
         l.attn_qkv.rows == 13312 && l.attn_qkv.cols == 2560 &&
         c.num_heads == 24 && c.num_kv_heads == 2 && c.head_dim == 256 &&
@@ -2267,14 +2273,14 @@ bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
       half_bf16_ = false;
     }
     const auto* x_half = static_cast<const __half*>(s_.x_half);
-    // Large batches pair the gate/up projections and apply SwiGLU without
-    // materializing the gate. Smaller buckets favor separate projections.
+    // Prefill pairs the gate/up projections and applies SwiGLU without
+    // materializing the gate; decode-time batches keep separate projections.
     auto* up_half = reinterpret_cast<__half*>(s_.up_e);
     const WeightType gate_type = l.ffn_gate_exps.type == GgmlType::kQ5_K
                                      ? WeightType::kQ5_K
                                      : WeightType::kQ4_K;
     const bool gated_ok =
-        n_tokens >= 1024 && routed_tile_rows_ == 48
+        routed_64_tiles_ != 0
             ? RoutedGatedF16Gemm(
                   l.ffn_gate_exps.data, l.ffn_up_exps.data, gate_type, x_half,
                   s_.routed_tiles + routed_pair_offset_, routed_pair_tiles_,
@@ -2297,12 +2303,9 @@ bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
     const WeightType down_type = l.ffn_down_exps.type == GgmlType::kQ8_0
                                      ? WeightType::kQ8_0
                                      : WeightType::kQ5_1;
-    // Larger down tiles amortize weight decoding. Reuse the 64-token map
-    // when it has no more padded rows than the 48-token map.
-    const bool wide_down =
-        (down_type == WeightType::kQ5_1 || down_type == WeightType::kQ8_0) &&
-        routed_tile_rows_ == 48 && routed_64_tiles_ != 0 &&
-        routed_64_tiles_ * 4 <= routed_n_tiles_ * 3;
+    // Prefill takes the 64-token down tiles: they decode each expert's
+    // weights over more rows, also where narrower tiles would be fewer.
+    const bool wide_down = routed_64_tiles_ != 0;
     // The down projection's rows are F16 too: the epilogue reads half the
     // bytes of the largest routed intermediate.
     if (!RoutedF16Gemm(l.ffn_down_exps.data, down_type, up_half,
@@ -2721,20 +2724,18 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     }
     // Both stacked SSM projections consume the same F16 input. Avoid writing
     // unused F32/Q8 copies when the wide mixer can supply that input directly.
-    const bool half_only = prefill_phase && !speculative && n >= 1024 &&
-                           n <= options_.max_batch && l.linear &&
-                           DenseF16Route(l.ssm_in, n) &&
-                           l.ssm_alpha_beta.type == GgmlType::kF16 &&
-                           l.ssm_alpha_beta.cols == l.ssm_in.cols;
+    const bool half_only =
+        WidePrefill(n) && !speculative && n <= options_.max_batch && l.linear &&
+        DenseF16Route(l.ssm_in, n) && l.ssm_alpha_beta.type == GgmlType::kF16 &&
+        l.ssm_alpha_beta.cols == l.ssm_in.cols;
     if (!HcMix(l.hc_attn, s_.res, normed, s_.mixed, s_.inject, n, error_msg,
                half_only)) {
       return false;
     }
     // The last target layer's query outputs have no later cache consumer.
     // Preserve all K/V/indexer rows and the final query's original tile.
-    const bool last_attention = prefill_phase && !session.mtp_enabled_ &&
-                                il + 1 == c.num_layers && n >= 1024 &&
-                                n_logits == 1;
+    const bool last_attention = WidePrefill(n) && !session.mtp_enabled_ &&
+                                il + 1 == c.num_layers && n_logits == 1;
     if (l.linear) {
       if (!LinearAttention(l, session.linear_[il], s_.mixed, s_.block_out, n,
                            speculative, error_msg)) {

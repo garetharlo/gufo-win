@@ -969,6 +969,66 @@ the previous binary sends nothing until the body arrives (client read times
 out). The added test could not be built here (`cpu-test` configure needs ICU,
 Linux/Nix only).
 
+### [x] #690 — wide prefill routes for every prefill pass
+
+Upstream: `53f73b5`, ported 2026-10-21. The routed 64-row expert tiles and the
+fused prefill projections were previously only taken near the chunk width; now
+every prefill pass uses them. `RouteHints` builds its maps whenever
+`routed_64_tiles_ != 0` (upstream: `n >= 1024 && routed_tile_rows_ == 48`),
+the fused SSM and attention projection gates plus `half_only` /
+`last_attention` test `WidePrefill(n)` (prefill and `n > kVecBatch`) instead of
+`n >= 1024`, and `AttentionF16Gemm` / `DenseF16SsmGemm` accept any non-zero
+batch (`n_tokens == 0` guard, was `< 1024`). Fork adaptations: `routed_pair_rows_`
+negotiation and the base-map-first tile layout are kept, and the extra
+`!speculative` on `half_only` and the `n_logits == 1` `last_attention` shape
+stay fork-local. Tests gained the 9/33/470 batches (`batch > 8` path
+expectations, 16- and 48-row pair check). The stale test targets whose sources
+no longer exist were dropped from `tests/models/qwen38_flash_next/CMakeLists.txt`
+so the suite configures.
+
+Measured on UD-Q4_K_XL, interleaved A/B with alternating order (base first,
+port first) in one session, `gufo bench -p 9,33,128,470,1023,2048 -n 16 -d 0
+-r 3`:
+
+| test | baseline | #690 | delta |
+| --- | ---: | ---: | ---: |
+| pp9 | 94.25 / 93.56 | 92.09 / 92.34 | see below; not a regression |
+| pp33 | 228.40 / 228.18 | 226.99 / 228.72 | neutral |
+| pp128 | 551.68 / 551.46 | 561.87 / 562.88 | +1.9% |
+| pp470 | 1039.85 / 1036.73 | 1146.02 / 1140.12 | +10.2% |
+| pp1023 | 1231.23 / 1229.53 | 1405.19 / 1403.98 | +14.2% |
+| pp2048 | 1537.18 / 1526.12 | 1543.32 / 1543.54 | +0.8% |
+| tg16 | 29.07 / 28.97 | 28.98 / 29.07 | neutral |
+
+The pp9 pair looked like a 2% loss until it was re-measured on its own with
+three alternating pairs (`-p 9,33,128 -n 0 -r 4`, order B,A,B,A,A,B): pp9
+92.15 / 92.35 / 93.06 baseline versus 92.94 / 92.76 / 93.57 ported, and
+neutral at pp33, so the first session's pp9 pair was machine drift. The same sweep
+gives pp128 549.57 / 549.44 / 551.83 versus 561.62 / 565.20 / 566.37 (+2.6%)
+and pp33 unchanged.
+
+At depth, `gufo bench -p 1023,2048 -n 16 -d 0,32768 -r 2` (order B,A,A,B):
+
+| cell | baseline | #690 | delta |
+| --- | ---: | ---: | ---: |
+| pp1023 d0 | 1283.02 / 1273.35 | 1452.34 / 1438.67 | +13.4% |
+| pp1023 d32K | 1104.08 / 1101.89 | 1254.10 / 1254.95 | +13.6% |
+| pp2048 d0 | 1614.09 / 1598.23 | 1620.98 / 1613.13 | +0.7% |
+| pp2048 d32K | 1408.99 / 1409.80 | 1419.76 / 1416.56 | +0.6% |
+| tg16 d0 | 29.04 / 28.82 | 28.93 / 28.94 | neutral |
+| tg16 d32K | 27.27 / 27.19 | 27.31 / 27.23 | neutral |
+
+Quality: `--validate-prefill 64` identical on both binaries (rmse 0.28,
+cosine 1.00, max error 1.30); greedy 48 tokens after a ~500-token prompt
+byte-identical; with `--speculative mtp` (shared-Q8_0 sidecar) also
+byte-identical. Model load was 47–82 s across these runs with no relation to
+the binary. Both ops tests pass with the new mid-size batches; on this host
+`qwen38_flash_next.projection_ops` aborts in `CheckSmallProjection` ("small
+projection changes with batch width") at HEAD too, so that block was skipped
+temporarily while the new 9/33/470 checks ran. The host's clang-format (23.1.3,
+pip) reports violations in untouched files, so it cannot gate this port; the
+added lines are clean under it and reduce `executor.cpp` from 6 to 5.
+
 ### [-] #680 — avoid repeated resets and full checkpoint lookups
 
 Upstream: `887c38a`, not ported. It optimizes upstream's tiered cache
@@ -1016,8 +1076,10 @@ staging path (28.5 GB resident weights, no stall, valid PNG).
 
 ## Recommended order
 
-Working order, as of October 19 2026 (decode is already at upstream parity,
-so prefill and loading lead):
+Working order, as of October 21 2026 (decode is already at upstream parity,
+so prefill and loading lead). Everything below except item 3 has landed; the
+rest of upstream up to 0.20.0 (`0c03748`) is either already in the fork or
+belongs to the tiered cache stack the fork does not have.
 
 1. ~~`#459` + `#481` + `#482` + `#633 Prepare`~~ done, see Tier 1.
 2. ~~`#421` + `#463`~~ done. `#485` in progress — GDN row reuse
@@ -1033,6 +1095,9 @@ so prefill and loading lead):
 7. `#613` + `#603` — agent/rewrite decode; benchmark English vs multilingual
    and sampled extraction (watch the −5% case).
 8. `#645` + `#415` — multimodal and sampled-request polish.
+9. ~~Upstream sweep to 0.20.0~~ done: `#692` is a functional test only and
+   `#540` needs the tiered cache (same disposition as `#680`); `#690` landed
+   as the wide prefill routes, +10% pp470 and +13–14% pp1023 at d0 and d32K.
 
 ## Measurement log
 
