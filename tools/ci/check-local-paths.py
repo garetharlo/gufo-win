@@ -14,8 +14,8 @@ in every file version a push would publish (--pushed, used by the pre-push
 hook), in staged files (--staged, used by the pre-commit hook), in named files,
 or in every tracked file. Either slash counts, and UTF-16 companions
 (PowerShell redirection writes its logs that way) are read by dropping the NUL
-bytes. Other accounts stay allowed: upstream sources carry fixtures such as
-`C:/Users/Mate`.
+bytes. Other accounts stay allowed: upstream sources carry fixtures with their
+own profile paths.
 """
 
 import argparse
@@ -38,6 +38,8 @@ def workspace_patterns(root: Path) -> list:
         text = str(parent)
         if re.fullmatch(r"[A-Za-z]:[\\/]", text):
             continue  # a drive root is nobody's personal directory
+        if re.fullmatch(r"[A-Za-z]:[\\/]Users", text, re.IGNORECASE):
+            continue  # the shared users folder, not one person's directory
         if not re.match(r"[A-Za-z]:[\\/]", text):
             continue  # a POSIX path, or the relative tail of the checkout
         for form in dict.fromkeys([text, text.replace("\\", "/")]):
