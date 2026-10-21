@@ -105,9 +105,9 @@ survival stopping, the Latin draft vocabulary, prompt lookup and temperature
 What this fork is about, in one list:
 
 - **Native Windows on Strix Halo.** Build and run Gufo directly on Windows 11
-  against AMD's TheRock ROCm — no WSL, no containers. Today that means building
-  from source below; prebuilt release zips are planned but not published yet,
-  so the Releases link will 404 until the first one lands.
+  against AMD's TheRock ROCm — no WSL, no containers — and publish prebuilt
+  release zips so a working server is unpack-and-run from a fresh Strix Halo
+  machine.
 - **Stay close to upstream.** Port upstream gufo's fixes and optimizations as
   they land, and keep the Windows path behaviorally identical to it: bit-exact
   logit checks and seeded-decode byte-identity are the gate for accepting any
@@ -128,9 +128,12 @@ What this fork is about, in one list:
 1. Reserve dedicated GPU memory for the model you want (AMD Software >
    Performance > Tuning > Variable Graphics Memory): **96 GB** runs
    Qwen3.8-Flash-Next at the full 256K context and decode speed.
-2. Prebuilt zips are planned but not published yet; today, start at
-   [Build from source](#build-from-source) and come back with
-   `build\release\gufo.exe`.
+2. Download `gufo-windows-0.1.0.zip` from
+   [Releases](https://github.com/jaacMusic/gufo-win/releases/tag/v0.1.0) and
+   unpack it. `gufo.exe` carries its ROCm, vcpkg and VC++ runtimes; it needs
+   only a Strix Halo machine, a current AMD driver and the models. Its
+   `README.txt` lists the downloads. Prefer building yourself? See
+   [Build from source](#build-from-source).
 3. Download the qualified Flash-Next files with the Hugging Face CLI
    (`pip install -U huggingface_hub`):
 
