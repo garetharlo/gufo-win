@@ -161,8 +161,7 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
   parser.AddOption("", "--mtp-model", "PATH",
                    "Path to quantized Qwen MTP draft head GGUF file",
                    "Speculative", &opt.mtp_model_path);
-  parser.AddFlag("", "--prompt-lookup",
-                 "Copy repeated context into MTP drafts",
+  parser.AddFlag("", "--prompt-lookup", "Copy repeated context into MTP drafts",
                  "Speculative", &opt.prompt_lookup);
   parser.AddCustomOption(
       "-d", "--draft-tokens", "N",
@@ -662,12 +661,13 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
   }
   auto model = models::qwen38_flash_next::Model::Load(
       opt.model_path,
-      {.max_context = kDefaultContext,
-       .mtp_model_path =
-           opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
-       .max_draft_tokens = opt.draft_tokens,
-       .vision_model_path = opt.vision_model_path,
-       .prompt_lookup = opt.prompt_lookup,
+      {
+          .max_context = kDefaultContext,
+          .mtp_model_path =
+              opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
+          .max_draft_tokens = opt.draft_tokens,
+          .vision_model_path = opt.vision_model_path,
+          .prompt_lookup = opt.prompt_lookup,
       },
       &error);
   PrintModelLoadTime(load_start, model != nullptr);

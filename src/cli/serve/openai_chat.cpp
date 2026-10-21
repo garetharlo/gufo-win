@@ -1221,9 +1221,10 @@ ParsedGeneration ParseGeneration(
     if (!parsed.tool_calls.empty() || !enforce_required) {
       // The newline a model writes between or after its calls is layout, not
       // a reply: a turn of parallel calls would otherwise carry "\n" (#676).
-      parsed.text = Trim(text_before_tools).empty() && !parsed.tool_calls.empty()
-                        ? ""
-                        : text_before_tools;
+      parsed.text =
+          Trim(text_before_tools).empty() && !parsed.tool_calls.empty()
+              ? ""
+              : text_before_tools;
       parsed.hide_tool_markup = true;
     }
   }

@@ -936,9 +936,8 @@ bool Session::AppendLookup(PendingDecode& pending, bool stop_at_eos,
   if (match.length == 0) {
     return false;
   }
-  const std::size_t available =
-      std::min(cap - pending.chain.size(),
-               lookup_.IndexedTokens() - match.start);
+  const std::size_t available = std::min(cap - pending.chain.size(),
+                                         lookup_.IndexedTokens() - match.start);
   if (available < minimum)
     return false;
   std::size_t count = 0;
@@ -1015,13 +1014,13 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   const std::size_t width =
       MtpEnabled() && cap > 1
           ? 1 + (batch_drafts ? std::min<std::uint32_t>(*batch_drafts, cap - 1)
-                  : survival   ? std::min<std::uint32_t>(
-                                   kMaxMtpDraftTokens,
-                                   static_cast<std::uint32_t>(cap - 1))
-                              : draft_length_.Choose(
-                                    static_cast<std::uint32_t>(cap - 1),
-                                    static_cast<std::uint32_t>(tokens_.size()),
-                                    pending->policy_concurrency))
+                 : survival   ? std::min<std::uint32_t>(
+                                  kMaxMtpDraftTokens,
+                                  static_cast<std::uint32_t>(cap - 1))
+                            : draft_length_.Choose(
+                                  static_cast<std::uint32_t>(cap - 1),
+                                  static_cast<std::uint32_t>(tokens_.size()),
+                                  pending->policy_concurrency))
           : cap;
   if (width == 0) {
     result->stop = true;

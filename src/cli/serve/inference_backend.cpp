@@ -93,9 +93,10 @@ TextPreparedPrompt PrepareQwenPrompt(
   if (has_images) {
     // fork has no Logger::LogFormatted; one line per image request is enough.
     const auto stats = image_cache.GetStats();
-    Logger::Info("vision", "event=image_cache hits=" + std::to_string(stats.hits) +
-                               " misses=" + std::to_string(stats.misses) +
-                               " entries=" + std::to_string(stats.entries));
+    Logger::Info("vision",
+                 "event=image_cache hits=" + std::to_string(stats.hits) +
+                     " misses=" + std::to_string(stats.misses) +
+                     " entries=" + std::to_string(stats.entries));
   }
   const auto cache_prefix = prompt->stable_prefix_tokens;
   if (prompt->images.empty())
@@ -2439,9 +2440,8 @@ public:
     const auto prefix = QwenFlashNextEngineTokens(prompt.first(next_position));
     const std::size_t after = prompt.size() - next_position;
     const auto next = QwenFlashNextEngineTokens(prompt.subspan(
-        next_position,
-        std::min<std::size_t>(
-            {max_input_tokens, after, model_->PrefillCapacity()})));
+        next_position, std::min<std::size_t>({max_input_tokens, after,
+                                              model_->PrefillCapacity()})));
     // Read inputs for tokens past this chunk while it runs; the next call
     // most likely consumes exactly this span.
     const auto lookahead = state.prefill_lookahead();
@@ -3454,7 +3454,9 @@ bool InferenceBackend::ready() const {
 #endif
 }
 
-bool InferenceBackend::device_lost() const { return false; }
+bool InferenceBackend::device_lost() const {
+  return false;
+}
 
 bool InferenceBackend::supports_images() const {
 #if defined(ENGINE_ENABLE_HIP)

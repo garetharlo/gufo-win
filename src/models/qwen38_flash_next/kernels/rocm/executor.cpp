@@ -550,8 +550,8 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     if (!Check(hipHostMalloc(&pinned, T * c.PleEmbeddingDim() * sizeof(float),
                              hipHostMallocMapped | hipHostMallocCoherent),
                "pinned n-gram buffer", error_msg) ||
-        !Check(hipHostGetDevicePointer(
-                   reinterpret_cast<void**>(&s.ple_emb), pinned, 0),
+        !Check(hipHostGetDevicePointer(reinterpret_cast<void**>(&s.ple_emb),
+                                       pinned, 0),
                "mapped n-gram buffer", error_msg)) {
       return nullptr;
     }
@@ -2386,9 +2386,8 @@ bool Executor::MtpHead(const DeviceMixer& head, const float* res, bool token,
   const std::uint32_t rows =
       draft != nullptr ? prefix + kMtpDraftExtraRows : output.rows;
   if (!HcMix(head, res, false, s_.mixed, nullptr, 1, error_msg) ||
-      !(draft != nullptr
-            ? DraftLogits(*draft, s_.mixed, s_.logits, error_msg)
-            : Dense(output, s_.mixed, s_.logits, 1, error_msg))) {
+      !(draft != nullptr ? DraftLogits(*draft, s_.mixed, s_.logits, error_msg)
+                         : Dense(output, s_.mixed, s_.logits, 1, error_msg))) {
     return false;
   }
   const auto count = std::min<std::uint32_t>(rows, kMtpCandidates);
@@ -3549,7 +3548,7 @@ bool Executor::MtpForward(Session& session,
 bool Executor::MtpBody(Session& session, std::uint32_t n, std::uint32_t pos,
                        bool token, bool candidates, std::string* error_msg,
                        std::uint32_t pool_grid, const float* hidden_source,
-                        MtpTrace* trace, bool kv_only, bool draft_subset) const {
+                       MtpTrace* trace, bool kv_only, bool draft_subset) const {
   const Config& c = config();
   const DeviceLayer& l = model_->mtp();
   const std::uint32_t hc_dim = c.HcDim();

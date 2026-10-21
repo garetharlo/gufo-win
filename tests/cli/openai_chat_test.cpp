@@ -500,16 +500,15 @@ void TestParallelCallSeparatorIsNotContent() {
 
   const auto body = gufo::json::parse(response.body);
   const auto* choices = body.find("choices");
-  const auto* message =
-      choices && !choices->items().empty()
-          ? choices->items()[0].find("message") : nullptr;
+  const auto* message = choices && !choices->items().empty()
+                            ? choices->items()[0].find("message")
+                            : nullptr;
   const auto* content = message ? message->find("content") : nullptr;
-  Expect(content != nullptr,
-         "Parallel-call response carries a content field");
-  Expect(content && (content->is_null() || content->is_string()) &&
-             (!content || !content->is_string() ||
-              content->as_string().empty()),
-         "Whitespace between parallel tool calls is not reported as content");
+  Expect(content != nullptr, "Parallel-call response carries a content field");
+  Expect(
+      content && (content->is_null() || content->is_string()) &&
+          (!content || !content->is_string() || content->as_string().empty()),
+      "Whitespace between parallel tool calls is not reported as content");
 }
 
 void TestToolParameterCompatibility() {

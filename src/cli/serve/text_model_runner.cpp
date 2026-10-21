@@ -893,8 +893,7 @@ TextRunnerNgramRows TextRunnerPool::Request::ngram_rows() const noexcept {
       dynamic_cast<const TextRunnerState&>(impl_->lease.state()));
   const auto& base = impl_->ngram_baseline;
   return {now.rows - base.rows, now.dedup_rows - base.dedup_rows,
-          now.cache_hits - base.cache_hits,
-          now.disk_reads - base.disk_reads};
+          now.cache_hits - base.cache_hits, now.disk_reads - base.disk_reads};
 }
 
 ContinuationLookup TextRunnerPool::Request::cache_lookup() const noexcept {

@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <vector>
+
 #include "src/core/sampling.hpp"
 #include "tests/models/qwen27b/sampling_cases.hpp"
 
