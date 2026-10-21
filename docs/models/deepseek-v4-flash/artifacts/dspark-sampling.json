@@ -1,7 +1,7 @@
 {
   "schema": "gufo.ds4-dspark-sampling.v1",
   "date": "2026-09-19",
-  "source_base": "8342fe1bd1ecbc646271f45e9ca904754b10e34b",
+  "source_base": "e75fb6029d37f37d3c290fc8689742a16e73396a",
   "canonical": {
     "cppStandard": "C++20",
     "cpuArchitecture": "x86_64",
@@ -40,8 +40,8 @@
     }
   },
   "releases": {
-    "baseline": "/nix/store/gcsl2m44v2674ya79vxz4j2699vckzrw-gufo-a6c029d-dirty/bin/gufo",
-    "hybrid": "/nix/store/75p75cb4rmvsck49zj2n1ry4l50h8338-gufo-8342fe1-dirty/bin/gufo"
+    "baseline": "/nix/store/gcsl2m44v2674ya79vxz4j2699vckzrw-gufo-b713f0c-dirty/bin/gufo",
+    "hybrid": "/nix/store/75p75cb4rmvsck49zj2n1ry4l50h8338-gufo-e75fb60-dirty/bin/gufo"
   },
   "settings": {
     "temperature": 1,
@@ -448,7 +448,7 @@
     "The naming case ended before 128 tokens: 23 baseline and 21 hybrid.",
     "No full-logit arrays retained."
   ],
-  "quality_release": "/nix/store/j3zj2xg9mw5g35jza9zyz5i8kpmnb3ky-gufo-8342fe1-dirty/bin/gufo",
+  "quality_release": "/nix/store/j3zj2xg9mw5g35jza9zyz5i8kpmnb3ky-gufo-e75fb60-dirty/bin/gufo",
   "quality": {
     "nix_release_build": "passed",
     "focused_ctest": [
@@ -496,5 +496,5 @@
       }
     ]
   },
-  "published_release": "/nix/store/mwfi22zq48xw1wb54j1v6bpa92j4mlhf-gufo-8342fe1-dirty/bin/gufo"
+  "published_release": "/nix/store/mwfi22zq48xw1wb54j1v6bpa92j4mlhf-gufo-e75fb60-dirty/bin/gufo"
 }

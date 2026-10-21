@@ -6,7 +6,7 @@
   "source": {
     "buildMode": "nix-release",
     "dirty": true,
-    "revision": "1589ed791a843ff05685c74a37b3c2bdb4cf5c1b"
+    "revision": "9651b46e6e949a8b2177c02714b12825cecf9a07"
   },
   "workload": {
     "cachePrompt": false,

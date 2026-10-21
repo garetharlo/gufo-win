@@ -82,7 +82,7 @@ __global__ __launch_bounds__(1024, 1) static void attention_mixed_heads32_wmma_k
     /* Two groups, not four. Four measured -4.4% on this kernel in isolation but
      * nothing end-to-end (433.1 against 433.2 tok/s), and its extra
      * reassociation of the score sum moved the prefill envelope from rmse 0.41
-     * to 0.48 -- no longer clearly better than the 16d5e30 baseline's 0.478146.
+     * to 0.48 -- no longer clearly better than the 3126dde baseline's 0.478146.
      * Not worth the margin. */
     constexpr uint32_t QK_WG = 2u;
     __shared__ float qk_part[2u * (QK_WG - 1u) * BM * ROWS];

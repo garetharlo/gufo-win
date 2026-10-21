@@ -70,7 +70,7 @@
   "source": {
     "buildMode": "nix-release",
     "dirty": true,
-    "revision": "89d58eb7e68eb0cc8bfe3a79917e913a9a543be8"
+    "revision": "9b7786ffdce723dde920e410fb3ebbb2ac8b030b"
   },
   "table": "memory",
   "target": "gufo"

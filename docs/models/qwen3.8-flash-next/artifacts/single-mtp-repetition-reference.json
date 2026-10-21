@@ -60,7 +60,7 @@
       "source": {
         "buildMode": "nix-release",
         "dirty": true,
-        "revision": "ff539ca5a1b321c917dbed2f19a868a17e1383f7"
+        "revision": "0c9965b9f953c95ae04b6fcdff3ad1771fe0675f"
       },
       "tg": 48.12,
       "tg_sd": null
@@ -87,7 +87,7 @@
       "source": {
         "buildMode": "nix-release",
         "dirty": true,
-        "revision": "ff539ca5a1b321c917dbed2f19a868a17e1383f7"
+        "revision": "0c9965b9f953c95ae04b6fcdff3ad1771fe0675f"
       },
       "tg": 43.53,
       "tg_sd": null
@@ -169,7 +169,7 @@
       "source": {
         "buildMode": "nix-release",
         "dirty": true,
-        "revision": "ff539ca5a1b321c917dbed2f19a868a17e1383f7"
+        "revision": "0c9965b9f953c95ae04b6fcdff3ad1771fe0675f"
       },
       "tg": 43.66,
       "tg_sd": null
@@ -196,7 +196,7 @@
       "source": {
         "buildMode": "nix-release",
         "dirty": true,
-        "revision": "ff539ca5a1b321c917dbed2f19a868a17e1383f7"
+        "revision": "0c9965b9f953c95ae04b6fcdff3ad1771fe0675f"
       },
       "tg": 39.28,
       "tg_sd": null
@@ -223,7 +223,7 @@
       "source": {
         "buildMode": "nix-release",
         "dirty": true,
-        "revision": "ff539ca5a1b321c917dbed2f19a868a17e1383f7"
+        "revision": "0c9965b9f953c95ae04b6fcdff3ad1771fe0675f"
       },
       "tg": 45.71,
       "tg_sd": null
@@ -323,7 +323,7 @@
       "source": {
         "buildMode": "nix-release",
         "dirty": true,
-        "revision": "ff539ca5a1b321c917dbed2f19a868a17e1383f7"
+        "revision": "0c9965b9f953c95ae04b6fcdff3ad1771fe0675f"
       },
       "tg": 44.31,
       "tg_sd": null

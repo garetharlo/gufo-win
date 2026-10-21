@@ -1,6 +1,6 @@
 {
   "date": "2026-09-21",
-  "baseline_revision": "1589ed791a843ff05685c74a37b3c2bdb4cf5c1b",
+  "baseline_revision": "9651b46e6e949a8b2177c02714b12825cecf9a07",
   "candidate": "native HIP WMMA; 128-key local softmax for <=4096 rows, 32-key online softmax for longer sequences",
   "hardware": "AMD Strix Halo gfx1151",
   "toolchain": {

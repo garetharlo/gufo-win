@@ -12,7 +12,7 @@
   },
   "benchmarks-2026-09-22": {
     "reference": "llama.cpp b11069 from flake.nix (0.4.1-dev build 11069, commit 68d9053a), ROCm gfx1151",
-    "gufoArMemory": "revision 89d58eb7 (tree dirty only by docs/models/qwen3.8-flash-next), nix build, binary sha256 prefix 4b1e592acb7e4a56",
+    "gufoArMemory": "revision 9b7786ff (tree dirty only by docs/models/qwen3.8-flash-next), nix build, binary sha256 prefix 4b1e592acb7e4a56",
     "referenceMtp": "llama-server-mtp, llama.cpp commit 6fcaa16f, pinned ROCm recipe in flake.nix",
     "note": "Retained single-user AR, reference single-user MTP and memory measurements. Per-artifact source revisions and commands are authoritative."
   },

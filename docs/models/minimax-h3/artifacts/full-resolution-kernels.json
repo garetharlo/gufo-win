@@ -1,6 +1,6 @@
 {
   "date": "2026-09-21",
-  "baseline_revision": "f1206afabd5937904cea9c9230e976e0bdb781f9",
+  "baseline_revision": "aadb3ef0ac9e146d6a70607ed9d0c0e7e3e5a153",
   "candidate": "native BF16 projections, fused QKV/norm/RoPE and FFN gate/up/SwiGLU, packed AdaLN/attention outputs, interior/tail tiles, vector stores, shared scratch and in-place trunk",
   "hardware": "AMD Strix Halo gfx1151",
   "toolchain": {

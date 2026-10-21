@@ -11,7 +11,7 @@
     "draft": "z-lab/Qwen3.8-27B-DFlash2-GGUF, Qwen3.8-27B-DFlash2-Q4_K_M.gguf"
   },
   "benchmarks-2026-09-21": {
-    "gufo": "revision 1589ed79 (dirty), nix build, binary sha256 prefix 73590c9c12fb",
+    "gufo": "revision 9651b46e (dirty), nix build, binary sha256 prefix 73590c9c12fb",
     "reference": "llama.cpp b11069 from flake.nix (0.4.1-dev build 11069), ROCm gfx1151, LLAMA_HIP_UMA=ON",
     "targets": [
       "Target UD-Q4_K_XL",

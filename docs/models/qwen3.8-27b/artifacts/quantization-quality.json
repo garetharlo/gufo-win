@@ -1,7 +1,7 @@
 {
   "schema": "gufo-quantization-quality/1",
   "measured_on": "2026-09-24",
-  "source_revision": "00d3996a168c77b086f54e94a85539f2481c0d41",
+  "source_revision": "812cb2a2bf32fc67b6ba300273702169e9aa4c33",
   "source_changes": "Test reference mode skips unrelated replay/concurrency sweeps; inference unchanged.",
   "test_source": "tests/models/qwen27b/target_test.cpp",
   "test_source_sha256": "f1fd721272460d6a2ba2a8b518333deb0126b4b83500033d2e60d3cc3efb00b5",
