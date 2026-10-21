@@ -16,31 +16,94 @@ Contributions are welcome!
 
 ## Models and benchmarks
 
-All model documentation lives under [docs/models](docs/models/README.md):
-
-| Model | Inference modes | Hugging Face weights | Benchmarks | Quality |
-| --- | --- | --- | --- | --- |
-| [Qwen3.8 27B](docs/models/qwen3.8-27b/README.md) | Q4/Q8, images, AR, DFlash2 | Unsloth [Q4_K_XL](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_XL.gguf) / [Q8_K_XL](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q8_K_XL.gguf) · [DFlash2 Q4_K_M](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2-GGUF/blob/2d9571f8ce46e151f61c6499c99dee6079e1d610/Qwen3.8-27B-DFlash2-Q4_K_M.gguf) | Q4: **656.33 tok/s pp**; up to **70.56 tok/s tg** single user and **123.00 aggregated tok/s** on 8 concurrent requests with DFlash2 · [Benchmarks](docs/models/qwen3.8-27b/BENCHMARKS.md) | [Quality](docs/models/qwen3.8-27b/QUALITY.md) |
-| [Qwen3.8 Flash-Next](docs/models/qwen3.8-flash-next/README.md) | Q4, images, AR, MTP | Unsloth [Q4_K_XL](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/38bb39ee97821de2c9009abb7e93950eec396e66/UD-Q4_K_XL) · [MTP Q8_0](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf) | **1,628.52 tok/s pp**; up to **59.41 tok/s tg** single user and **157.22 aggregated tok/s** on 8 concurrent requests with MTP; direct 8K–256K sweep: **1,600.90 tok/s pp**, up to **75.38 tok/s MTP tg** (repeated-text upper bound, 10.6–19.6% faster than bubo 0.1.0) · [Benchmarks](docs/models/qwen3.8-flash-next/BENCHMARKS.md) · [Context sweep](docs/models/qwen3.8-flash-next/bench-context.html) | [Quality](docs/models/qwen3.8-flash-next/QUALITY.md) |
-| [Qwen3.6-35B-A3B](docs/models/qwen3.6-35b-a3b/README.md) | `qwen35moe` GGUFs, images, AR | See [its guide](docs/models/qwen3.6-35b-a3b/README.md) | In progress · [Benchmarks](docs/models/README.md) | In progress |
-| [DeepSeek V4 Flash](docs/models/deepseek-v4-flash/README.md) | AR, DSpark | [antirez Flash 0731 IQ2XXS](https://huggingface.co/antirez/deepseek-v4-gguf/blob/1cd7b564460821938add0475a60b942c409295e0/DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf) · [DSpark](https://huggingface.co/antirez/deepseek-v4-gguf/blob/e7f04037032990db0346398d249baf9fb9df1ccc/DeepSeek-V4-Flash-DSpark-support-0731.gguf) | **484.62 tok/s pp**; up to **26.62 tok/s tg** single user and **54.74 aggregated tok/s** on 8 concurrent requests with DSpark · [Benchmarks](docs/models/deepseek-v4-flash/BENCHMARKS.md) | [Quality](docs/models/deepseek-v4-flash/QUALITY.md) |
-| [Qwen3-ASR 1.7B](docs/models/qwen3-asr/README.md) | Speech recognition | [BF16](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/tree/7278e1e70fe206f11671096ffdd38061171dd6e5) | **15.27× realtime** · [Benchmarks](docs/models/qwen3-asr/BENCHMARKS.md) | [Quality](docs/models/qwen3-asr/QUALITY.md) |
-| [Qwen3-TTS 1.7B](docs/models/qwen3-tts/README.md) | Speech synthesis and voice cloning | BF16 [CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice) / [VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign) / [Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) | Up to **2.54× realtime**; **201 ms** to first audio (CustomVoice) · [Benchmarks](docs/models/qwen3-tts/BENCHMARKS.md) | [Quality](docs/models/qwen3-tts/QUALITY.md) |
-| [Qwen-Image-2.1](docs/models/qwen-image-2.1/README.md) | BF16 image generation and editing | [Complete pipeline](https://huggingface.co/Qwen/Qwen-Image-2.1/tree/b3179ad355be050328e483a9dfdd9e60cd62adfa) | In progress · [Benchmarks](docs/models/qwen-image-2.1/BENCHMARKS.md) | [Quality](docs/models/qwen-image-2.1/QUALITY.md) |
-| [MiniMax H3](docs/models/minimax-h3/README.md) | BF16 text to video/audio | [FL2VA pipeline](https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe/FL2VA) | In progress · [Benchmarks](docs/models/minimax-h3/BENCHMARKS.md) | [Quality](docs/models/minimax-h3/QUALITY.md) |
-
 **Running on Windows today:** `start.cmd` serves Qwen3.8-Flash-Next (adaptive
 MTP, images), Qwen3.8-27B (DFlash2) and Qwen3.6-35B-A3B. DeepSeek V4 Flash and
-the audio/video/image pipelines are documented for the engine but not yet
-validated on Windows.
+the audio/video/image pipelines are documented under
+[docs/models](docs/models/README.md) but not yet validated on Windows.
 
-Peak measured workloads; text pp is autoregressive (AR), while tg uses the
-named speculative mode. Peaks include repetitive output; aggregate tg sums
-individual request decode rates. Qwen27B's single-user peak uses the short-prompt
-C1 workload. Audio excludes loading. The Flash-Next context sweep uses direct
-`gufo bench` runs, so served rates differ (`start.cmd` enables survival
-stopping, the Latin draft vocabulary and prompt lookup); each model guide lists
-the required files and complete benchmark settings.
+### Qwen3.8 Flash-Next
+
+Full guides: [model guide](docs/models/qwen3.8-flash-next/README.md) ·
+[benchmarks](docs/models/qwen3.8-flash-next/BENCHMARKS.md) ·
+[quality](docs/models/qwen3.8-flash-next/QUALITY.md).
+
+Full guides: [model guide](docs/models/qwen3.8-flash-next/README.md) ·
+[benchmarks](docs/models/qwen3.8-flash-next/BENCHMARKS.md) ·
+[quality](docs/models/qwen3.8-flash-next/QUALITY.md).
+
+| Model | Inference modes | Hugging Face weights |
+| --- | --- | --- |
+| Qwen3.8 Flash-Next | Q4, images, AR, MTP | Unsloth [Q4_K_XL](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/38bb39ee97821de2c9009abb7e93950eec396e66/UD-Q4_K_XL) · [MTP Q8_0](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf) |
+
+A hybrid recurrent/QSA mixture-of-experts text/image model. Point the server
+at the first `UD-Q4_K_XL` shard and the loader discovers the rest; the MTP
+sidecar enables adaptive speculative decoding (default on, up to 7 draft
+tokens), `mmproj-BF16.gguf` adds image input. Native context is 262,144
+(YaRN extension unsupported); `start.cmd` serves 131,072 by default and sizes
+the context to your carve. The server is ready when the log shows
+`event=load_completed`.
+
+Measured on this machine: Windows 11, AMD Strix Halo `gfx1151`, 128 GB unified
+memory, 96 GB dedicated carve; unsloth `UD-Q4_K_XL` + shared-Q8_0 MTP; direct
+`gufo bench`, greedy, two timed repetitions after one untimed pass.
+
+- **Long-context sweep, 8K to 256K:** prefill **1,600.90 → 1,405.18 tok/s**, AR
+  decode **27.16 → 23.88 tok/s**, adaptive-MTP decode up to **75.38 tok/s**.
+  The 256K context holds the ~89 GiB model and state fully inside the 96 GB
+  carve, so it decodes at full speed. Full table and settings:
+  [context sweep](docs/models/qwen3.8-flash-next/bench-context.html).
+- **MTP column is an upper bound:** the bench prompt repeats a 20-token
+  pattern, and from 32K the model repeats it verbatim (drafts accepted 94–100%).
+  Realistic mixed-prompt MTP decode at depth is **28–35 tok/s**; the AR column
+  is the no-speculation reference. The 8K row accepts only 59%.
+- **Faster than bubo 0.1.0** on the same snapshot and bench command: prefill
+  **+3.8–7.9%**, MTP decode **+10.6–19.6%**, AR decode −1.3–7.8%.
+  [Comparison report](docs/models/qwen3.8-flash-next/bench-context-bubo.html).
+- **Windows decode switches stay high-speed and bit-identical:** with every
+  Windows switch on, logit dumps are bit-identical at all 4,418 positions and
+  seeded decode is byte-identical to the Linux path, which decodes **7.6–9.5%
+  slower** (sampled probes, prose / code / reasoning: **34.5 / 37.2 / 48.3**
+  tok/s against **32.0 / 34.3 / 44.1**).
+- **Loading:** the 103.7 GiB checkpoint keeps ~76.9 GiB resident and streams
+  its ~26.8 GiB n-gram table from disk; with a 96 GB carve loads in ~30 s. A
+  64 GB carve works but loads ~10× slower and reads weights beyond the carve
+  6–22% slower.
+
+Measured sampling options (single-session decoding, sampled, thinking on,
+3 seeds per prompt, Windows):
+
+| Option | What it does | Measured |
+| --- | --- | --- |
+| `--mtp-draft-vocab latin` | Draft head scores only Latin-script tokens (130K of 248K), half the output head per draft step | **+4.9% decode**, identical texts and acceptance; the only opt-in (`start.cmd` asks) |
+| `--mtp-policy survival` | Drafting stops when the per-proposal acceptance product falls below 0.40 instead of the length controller | **+8.7%** with the draft vocabulary (prose +7%, code +7%, reasoning +13%); on by default in `start.cmd` |
+| `--prompt-lookup` | A 12+-token conversation match proposes the tokens that followed it | File-editing replies **+10%** sampled; log quoting **+23%** greedy; prose unchanged; on by default in `start.cmd` |
+
+Reproduce the context sweep yourself (one benchmark process at a time; the
+96 GB carve fits a single Q4 instance):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\windows\bench-flash-next-context.ps1
+```
+
+**Not validated on Windows** — runs in the codebase but is untested or
+unqualified here:
+
+- DeepSeek V4 Flash and the ASR / TTS / video / image-generation pipelines are
+  documented under [docs/models](docs/models/README.md) but not validated on
+  Windows.
+- The `UD-IQ4_XS` quantization loads, but its expert paths are unqualified on
+  Windows (known small re-rounding of the Q6_K heads).
+- Upstream unquantized-model / GGUF-conversion parity remains unqualified
+  (inherited from the model guide).
+- Test status: every Flash-Next operator suite passes and 86/92 CPU-labelled
+  tests pass; Linux-only Python dev tools are not ported, and newer TheRock
+  clang versions can round fused kernels differently
+  ([docs/WINDOWS.md](docs/WINDOWS.md): port internals, memory and test notes).
+
+Served rates differ from the direct numbers: `start.cmd` additionally enables
+survival stopping, the Latin draft vocabulary, prompt lookup and temperature
+1.0, which direct `gufo bench` cannot set. Measure served rates over HTTP with
+`tools/serving/gufo-serving-bench.py`.
 
 ## Philosophy
 
