@@ -54,9 +54,6 @@ memory, 96 GB dedicated carve; unsloth `UD-Q4_K_XL` + shared-Q8_0 MTP; direct
   pattern, and from 32K the model repeats it verbatim (drafts accepted 94–100%).
   Realistic mixed-prompt MTP decode at depth is **28–35 tok/s**; the AR column
   is the no-speculation reference. The 8K row accepts only 59%.
-- **Faster than bubo 0.1.0** on the same snapshot and bench command: prefill
-  **+3.8–7.9%**, MTP decode **+10.6–19.6%**, AR decode −1.3–7.8%.
-  [Comparison report](docs/models/qwen3.8-flash-next/bench-context-bubo.html).
 - **Windows decode switches stay high-speed and bit-identical:** with every
   Windows switch on, logit dumps are bit-identical at all 4,418 positions and
   seeded decode is byte-identical to the Linux path, which decodes **7.6–9.5%
