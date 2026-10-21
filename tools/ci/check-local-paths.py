@@ -6,18 +6,20 @@ The tracked tree must stay reproducible anywhere: notes and scripts name
 directories with placeholders (%TEMP%, C:\\dev, ...) instead of one account name
 and one workstation layout. This check flags
 
-  * Windows user-profile paths (a drive letter, then `\\Users\\<name>` or
-    `/Users/<name>`), and
+  * this account's Windows user-profile path (a drive letter, then
+    `\\Users\\<name>` or `/Users/<name>`), and
   * any path under a parent directory of this checkout,
 
 in every file version a push would publish (--pushed, used by the pre-push
 hook), in staged files (--staged, used by the pre-commit hook), in named files,
 or in every tracked file. Either slash counts, and UTF-16 companions
 (PowerShell redirection writes its logs that way) are read by dropping the NUL
-bytes.
+bytes. Other accounts stay allowed: upstream sources carry fixtures such as
+`C:/Users/Mate`.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -25,8 +27,13 @@ from pathlib import Path
 
 
 def workspace_patterns(root: Path) -> list:
-    """Profile paths plus the Windows ancestors of this checkout, either slash."""
-    patterns = [re.compile(r"[A-Za-z]:[\\/]Users[\\/][^\\/\s\"'`<>|]+", re.IGNORECASE)]
+    """This account's profile plus the Windows ancestors of this checkout, either slash."""
+    names = {Path(os.environ.get(variable, "")).name for variable in ("USERPROFILE", "HOME")}
+    patterns = [
+        re.compile(r"[A-Za-z]:[\\/]Users[\\/]" + re.escape(name) + r"[\\/]", re.IGNORECASE)
+        for name in sorted(names)
+        if name
+    ]
     for parent in root.parents:
         text = str(parent)
         if re.fullmatch(r"[A-Za-z]:[\\/]", text):
@@ -83,34 +90,31 @@ def pushed_findings(root: Path, rev: str, patterns: list) -> list:
     if not refs:
         return []
 
-    proc = subprocess.Popen(
+    # run(input=...) writes and reads at the same time; feeding a long history
+    # through a hand-written stdin.write deadlocks once the batch output fills
+    # the pipe.
+    out = subprocess.run(
         ["git", "-C", str(root), "cat-file", "--batch"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-    )
-    proc.stdin.write("\n".join(refs).encode() + b"\n")
-    proc.stdin.close()
+        input="\n".join(refs).encode() + b"\n",
+        capture_output=True,
+    ).stdout
     findings = []
     seen = set()
+    at = 0
     for ref in refs:
-        header = proc.stdout.readline()
-        if header.endswith(b" missing\n") or b" blob " not in header:
-            continue
+        line_end = out.find(b"\n", at)
+        header = out[at:line_end]
+        at = line_end + 1
+        if b" blob " not in header:
+            continue  # missing object, or not a blob
         size = int(header.split()[2])
-        data = b""
-        while len(data) < size:
-            piece = proc.stdout.read(size - len(data))
-            if not piece:
-                break
-            data += piece
-        proc.stdout.read(1)  # trailing newline after the object
+        data = out[at : at + size]
+        at += size + 1  # the batch adds a newline after each object
         blob = header.split()[0]
         if blob in seen:
             continue
         seen.add(blob)
         findings.extend(findings_for(f"{ref[:7]}{ref[40:]}", data, patterns))
-    proc.stdout.close()
-    proc.wait()
     return findings
 
 
