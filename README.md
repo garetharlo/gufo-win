@@ -128,11 +128,9 @@ What this fork is about, in one list:
 1. Reserve dedicated GPU memory for the model you want (AMD Software >
    Performance > Tuning > Variable Graphics Memory): **96 GB** runs
    Qwen3.8-Flash-Next at the full 256K context and decode speed.
-2. Download a prebuilt `gufo-windows-<date>.zip` from
-   [Releases](https://github.com/jaacMusic/gufo-win/releases) and unpack it.
-   `gufo.exe` carries its ROCm, vcpkg and VC++ runtimes; it needs only a Strix
-   Halo machine, a current AMD driver and the models. Its `README.txt` lists
-   the downloads.
+2. Prebuilt zips are planned but not published yet; today, start at
+   [Build from source](#build-from-source) and come back with
+   `build\release\gufo.exe`.
 3. Download the qualified Flash-Next files with the Hugging Face CLI
    (`pip install -U huggingface_hub`):
 
