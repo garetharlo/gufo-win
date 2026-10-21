@@ -12,8 +12,6 @@ containers. The Linux original lives at
 [upstream gufo](https://github.com/pixmaate/gufo), and the port details are in
 [docs/WINDOWS.md](docs/WINDOWS.md).
 
-Contributions are welcome — report problems in
-[GitHub issues](https://github.com/jaacMusic/gufo-win/issues).
 
 ## Models and benchmarks
 
