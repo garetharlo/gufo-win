@@ -100,17 +100,28 @@ survival stopping, the Latin draft vocabulary, prompt lookup and temperature
 1.0, which direct `gufo bench` cannot set. Measure served rates over HTTP with
 `tools/serving/gufo-serving-bench.py`.
 
-## Philosophy
+## Goals
 
-We would like this to be the one-stop shop for Strix Halo Local AI
-enthusiasts: batteries included for text, audio, image, and video models.
+What this fork is about, in one list:
 
-- Build and optimize specifically for the Strix Halo 128 GiB hardware. Smaller memory configurations should still work and preserve the speed benefits for models that can fit on memory.
-- Support only the best available models for their size that can run on this hardware: less code to maintain, more focused optimization and testing work.
-- Preserve quality when optimizing. Each model's quality report records independent numerical checks, execution consistency and unresolved gaps. Don't reuse kernels across different models to limit blast radius of a code change.
-- Treat concurrent requests, cancellation and conversation caching as first-class workloads.
-- Keep production dependencies small and development tools separate.
-- Contributions are welcome — we need the Strix Halo community to keep improving gufo!
+- **Native Windows on Strix Halo.** Build and run Gufo directly on Windows 11
+  against AMD's TheRock ROCm — no WSL, no containers — and publish prebuilt
+  release zips so a working server is unpack-and-run from a fresh Strix Halo
+  machine.
+- **Stay close to upstream.** Port upstream gufo's fixes and optimizations as
+  they land, and keep the Windows path behaviorally identical to it: bit-exact
+  logit checks and seeded-decode byte-identity are the gate for accepting any
+  Windows-specific change.
+- **Only publish what is measured.** Anything in these docs carries numbers
+  from this machine, on the exact weights named; everything not confirmed here
+  is marked unvalidated instead of inherited from upstream.
+- **Depth over breadth.** Keep the model list short and the flagship model
+  (Qwen3.8-Flash-Next) fully documented: benchmarks, quality notes, memory
+  sizing, and the settings that reproduce them.
+- **The one-stop shop stays the destination.** Text, audio, image and video
+  models for Strix Halo, added as they can be validated on this hardware the
+  same way — smaller memory configurations still work and keep their speed for
+  what fits.
 
 ## Quickstart
 
