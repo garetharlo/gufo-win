@@ -12,14 +12,18 @@ containers. The Linux original lives at
 [upstream gufo](https://github.com/pixmaate/gufo), and the port details are in
 [docs/WINDOWS.md](docs/WINDOWS.md).
 
-Contributions are welcome!
+Contributions are welcome — report problems in
+[GitHub issues](https://github.com/jaacMusic/gufo-win/issues).
 
 ## Models and benchmarks
 
-**Running on Windows today:** `start.cmd` serves Qwen3.8-Flash-Next (adaptive
-MTP, images), Qwen3.8-27B (DFlash2) and Qwen3.6-35B-A3B. DeepSeek V4 Flash and
-the audio/video/image pipelines are documented under
-[docs/models](docs/models/README.md) but not yet validated on Windows.
+**Confirmed on this machine:** Qwen3.8-Flash-Next (adaptive MTP, images) —
+that is the model measured below. [docs/models](docs/models/README.md) and
+[docs/WINDOWS.md](docs/WINDOWS.md) also list Qwen3.8-27B (DFlash2) and
+Qwen3.6-35B-A3B as servable; they may be available in other builds or repos,
+but we cannot confirm that with measurements of our own. DeepSeek V4 Flash
+and the audio/video/image pipelines are documented but not validated on
+Windows.
 
 ### Qwen3.8 Flash-Next
 
@@ -137,23 +141,27 @@ survival stopping, the Latin draft vocabulary, images, thinking, context,
 network access) and Enter starts the server on
 `http://127.0.0.1:8080/v1`; it serves OpenAI-compatible Chat Completions
 (text, images, tools, streaming) and Responses (text, streaming). The scriptable
-form is `tools\windows\run-flash-next.ps1`.
+form is `tools\windows\run-flash-next.ps1`, with the common variations
+`-Think off`, `-Draft mtp3|off`, `-Context N` and `-Mode bench` (pp/tg at
+depths 0..128K).
 
 Then, from another terminal, ask it something:
 
 ```powershell
-curl http://127.0.0.1:8080/v1/chat/completions `
+curl.exe http://127.0.0.1:8080/v1/models   # the model id to use below
+curl.exe http://127.0.0.1:8080/v1/chat/completions `
   -H "Content-Type: application/json" `
-  -d '{\"model\": \"Qwen3.8-Flash-Next-UD-Q4_K_XL\", \"messages\": [{\"role\": \"user\", \"content\": \"Say something\"}]}'
+  -d '{\"model\": \"<id from /v1/models>\", \"messages\": [{\"role\": \"user\", \"content\": \"Say something\"}]}'
 ```
 
 For Open WebUI, VS Code and OpenAI SDK clients, set the API base URL to
 `http://127.0.0.1:8080/v1`. See the [API contract](docs/SERVER.md).
 
-The text server uses the model's native context by default and generates until
-EOS or the context is full. `--context N` sets context capacity per session;
-`--max-tokens N` sets a default response limit that clients can override.
-Reasoning tokens count toward that response limit.
+`start.cmd` sizes the context to your dedicated carve — 131,072 by default on
+a 96 GB carve; a direct `gufo serve llm --model ...` uses the model's native
+context unless you pass `--context N`, and generates until EOS or the context
+is full. `--max-tokens N` sets a default response limit that clients can
+override. Reasoning tokens count toward that response limit.
 
 ## Build from source
 
