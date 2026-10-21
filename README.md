@@ -9,7 +9,7 @@ the AMD Strix Halo hardware: Ryzen AI MAX+ 395 systems with Radeon 8060S
 (`gfx1151`), up to 128 GiB of unified memory. This fork builds and runs it
 natively on Windows 11 x64 against AMD's TheRock ROCm — no WSL, no
 containers. The Linux original lives at
-[upstream gufo](https://github.com/pixmaate/gufo), and the port details are in
+[upstream gufo](https://github.com/gufo-org/gufo), and the port details are in
 [docs/WINDOWS.md](docs/WINDOWS.md).
 
 
