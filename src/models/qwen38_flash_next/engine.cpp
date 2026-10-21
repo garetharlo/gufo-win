@@ -248,6 +248,17 @@ std::unique_ptr<Session> Model::CreateSession(core::SessionMode mode,
   if (!native) {
     return nullptr;
   }
+  if (vision_) {
+    // Image-capable slots can first serve text. Prepare the stable RoPE
+    // descriptor before any graphs capture a null pointer: replacing it
+    // later destroys those graphs during image admission.
+    try {
+      native->PrepareVision(executor_->stream());
+    } catch (const std::exception& exception) {
+      AssignError(error_msg, exception.what());
+      return nullptr;
+    }
+  }
   return std::unique_ptr<Session>(
       new Session(shared_from_this(), std::move(native)));
 }
