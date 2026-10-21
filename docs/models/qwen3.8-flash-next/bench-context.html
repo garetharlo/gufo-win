@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3.8 Flash Next — long-context sweep</title>
+<style>
+  :root {
+    --bg: #0a0e13;
+    --panel: #111820;
+    --panel-2: #0d141b;
+    --line: #1f2a36;
+    --text: #e6edf3;
+    --muted: #8b99a8;
+    --prefill: #4cc9f0;
+    --ar: #7b8cff;
+    --mtp: #46d39a;
+    --warn: #f0b45c;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 40px 24px 56px;
+    background:
+      radial-gradient(900px 420px at 12% -10%, #143042 0%, transparent 60%),
+      radial-gradient(700px 380px at 95% 0%, #1b2044 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main { max-width: 1040px; margin: 0 auto; }
+
+  .eyebrow {
+    margin: 0 0 8px;
+    color: var(--prefill);
+    font-size: 12px;
+    font-weight: 650;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(30px, 5vw, 46px);
+    line-height: 1.05;
+    letter-spacing: -.02em;
+  }
+
+  .sub {
+    margin: 8px 0 18px;
+    color: var(--muted);
+    font-size: 17px;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 26px;
+  }
+
+  .meta span {
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(17, 24, 32, .7);
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .stat, .card {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line);
+    border-radius: 14px;
+  }
+
+  .stat { padding: 16px 18px; }
+
+  .stat b {
+    display: block;
+    font-size: 26px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+  }
+
+  .stat small {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .card {
+    padding: 20px 22px;
+    margin-bottom: 14px;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: .01em;
+  }
+
+  .unit, .hint {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .bars { display: grid; gap: 10px; }
+
+  .bar-row {
+    display: grid;
+    grid-template-columns: 62px 1fr 132px;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .bar-label {
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .track {
+    height: 12px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #1a2430;
+  }
+
+  .fill {
+    width: var(--w);
+    height: 100%;
+    border-radius: inherit;
+    background: var(--c);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--c) 35%, transparent);
+  }
+
+  .value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
+  .value em {
+    color: var(--muted);
+    font-style: normal;
+    font-size: 11px;
+  }
+
+  .pair { display: grid; gap: 6px; }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .legend i {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--c);
+    vertical-align: 0;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 0 -4px;
+    padding: 0 4px;
+  }
+
+  table {
+    width: 100%;
+    min-width: 600px;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th, td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--line);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  th {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  th:first-child, td:first-child { text-align: left; }
+
+  tbody tr:last-child td { border-bottom: 0; }
+
+  td:first-child { font-weight: 600; }
+
+  .delta { display: block; margin-top: 1px; color: var(--mtp); font-size: 11px; }
+
+  .pill {
+    display: inline-block;
+    min-width: 84px;
+    padding: 3px 8px;
+    border: 1px solid #2b4a3d;
+    border-radius: 999px;
+    background: #12291f;
+    color: var(--mtp);
+    font-size: 11px;
+    text-align: center;
+  }
+
+  .pill.low {
+    border-color: #55452a;
+    background: #2a2214;
+    color: var(--warn);
+  }
+
+  .notes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .note {
+    padding: 16px 18px;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--warn);
+    border-radius: 0 12px 12px 0;
+    background: rgba(17, 24, 32, .55);
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .note strong {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text);
+    font-size: 12.5px;
+  }
+
+  code {
+    padding: 2px 5px;
+    border-radius: 5px;
+    background: #1a2430;
+    color: #cfe3f2;
+    font: 11.5px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+
+  footer {
+    margin-top: 18px;
+    color: #6e7c8b;
+    font-size: 11.5px;
+    text-align: center;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 28px 16px 40px; }
+    .stats, .notes { grid-template-columns: 1fr 1fr; }
+    .note:last-child { grid-column: 1 / -1; }
+    .bar-row { grid-template-columns: 44px minmax(0, 1fr) 112px; gap: 10px; }
+    .value { font-size: 12px; }
+    .legend { display: none; }
+    table { min-width: 0; font-size: 12px; }
+    th, td { padding: 8px 4px; }
+    th { font-size: 9.5px; letter-spacing: .04em; }
+    .pill { min-width: 0; padding: 3px 5px; font-size: 10px; }
+    .delta { font-size: 10px; }
+    .table-wrap { overflow-x: visible; }
+  }
+
+  @media print {
+    @page { margin: 10mm; }
+    body { padding: 0; background: #fff; color: #111; }
+    .stat, .card, .note { background: #fff; border-color: #ddd; }
+    .meta span, .pill { background: #fff; }
+    .sub, .meta span, .bar-label, .value em, .unit, .hint, .note, footer { color: #444; }
+    .track { background: #e8e8e8; }
+    .notes { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Gufo · Strix Halo · 96 GB</p>
+    <h1>Qwen3.8 Flash Next</h1>
+    <p class="sub">Long-context throughput at 8K, 32K, 128K and 256K</p>
+    <div class="meta">
+      <span>UD-Q4_K_XL · MTP shared Q8_0</span>
+      <span>Greedy · thinking off</span>
+      <span>2 timed reps after warm-up</span>
+      <span>20 October 2026</span>
+    </div>
+  </header>
+
+  <section class="stats" aria-label="Highlights">
+    <div class="stat"><b>1,601</b><small>tok/s prefill at 8K</small></div>
+    <div class="stat"><b>75.4</b><small>tok/s MTP decode at 32K</small></div>
+    <div class="stat"><b>262,144</b><small>native context tokens</small></div>
+    <div class="stat"><b>3.0×</b><small>MTP vs autoregressive at 256K</small></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Prefill / encode</h2>
+      <span class="unit">tokens per second</span>
+    </div>
+    <div class="bars">
+      <div class="bar-row">
+        <span class="bar-label">8K</span>
+        <div class="track"><div class="fill" style="--w:100%; --c:var(--prefill)"></div></div>
+        <span class="value">1600.90 <em>± 13.44</em></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">32K</span>
+        <div class="track"><div class="fill" style="--w:96.4%; --c:var(--prefill)"></div></div>
+        <span class="value">1542.13 <em>± 2.74</em></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">128K</span>
+        <div class="track"><div class="fill" style="--w:92.0%; --c:var(--prefill)"></div></div>
+        <span class="value">1473.04 <em>± 1.73</em></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">256K</span>
+        <div class="track"><div class="fill" style="--w:87.8%; --c:var(--prefill)"></div></div>
+        <span class="value">1405.18 <em>± 0.57</em></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Decode</h2>
+      <div class="legend">
+        <span><i style="--c:var(--ar)"></i>Autoregressive</span>
+        <span><i style="--c:var(--mtp)"></i>MTP</span>
+      </div>
+    </div>
+    <div class="bars">
+      <div class="bar-row">
+        <span class="bar-label">8K</span>
+        <div class="pair">
+          <div class="track"><div class="fill" style="--w:33.4%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:52.8%; --c:var(--mtp)"></div></div>
+        </div>
+        <span class="value">26.70 / 42.25 <em>tok/s</em></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">32K</span>
+        <div class="pair">
+          <div class="track"><div class="fill" style="--w:34.0%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:94.2%; --c:var(--mtp)"></div></div>
+        </div>
+        <span class="value">27.16 / 75.38 <em>tok/s</em></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">128K</span>
+        <div class="pair">
+          <div class="track"><div class="fill" style="--w:31.6%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:93.8%; --c:var(--mtp)"></div></div>
+        </div>
+        <span class="value">25.24 / 75.02 <em>tok/s</em></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">256K</span>
+        <div class="pair">
+          <div class="track"><div class="fill" style="--w:29.9%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:90.7%; --c:var(--mtp)"></div></div>
+        </div>
+        <span class="value">23.88 / 72.58 <em>tok/s</em></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Detailed results</h2>
+      <span class="hint">tok/s · mean ± stddev</span>
+    </div>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Context</th>
+          <th scope="col">Prefill / encode</th>
+          <th scope="col">Decode AR</th>
+          <th scope="col">Decode MTP</th>
+          <th scope="col">MTP acceptance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>8K</td>
+          <td>1600.90 ± 13.44</td>
+          <td>26.70 ± 2.33</td>
+          <td>42.25 ± 0.42 <span class="delta">1.58× AR</span></td>
+          <td><span class="pill low">59% (72/122)</span></td>
+        </tr>
+        <tr>
+          <td>32K</td>
+          <td>1542.13 ± 2.74</td>
+          <td>27.16 ± 0.20</td>
+          <td>75.38 ± 0.97 <span class="delta">2.78× AR</span></td>
+          <td><span class="pill">94% (110/117)</span></td>
+        </tr>
+        <tr>
+          <td>128K</td>
+          <td>1473.04 ± 1.73</td>
+          <td>25.24 ± 0.03</td>
+          <td>75.02 ± 0.96 <span class="delta">2.97× AR</span></td>
+          <td><span class="pill">100% (111/111)</span></td>
+        </tr>
+        <tr>
+          <td>256K</td>
+          <td>1405.18 ± 0.57</td>
+          <td>23.88 ± 0.02</td>
+          <td>72.58 ± 0.91 <span class="delta">3.04× AR</span></td>
+          <td><span class="pill">100% (111/111)</span></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div class="note">
+      <strong>256K edge</strong>
+      Prefill is 262,143 tokens and decode depth is 262,015, leaving room for
+      the next token plus 128 generated tokens within the native 262,144 limit.
+    </div>
+    <div class="note">
+      <strong>MTP is a ceiling</strong>
+      The bench repeats one fixed paragraph, so acceptance reaches ~100% from
+      32K up. Real mixed prompts land nearer 28–35 tok/s at 64K–128K.
+    </div>
+    <div class="note">
+      <strong>Runs were isolated</strong>
+      One model process at a time. <code>start.cmd</code> also enables survival
+      policy, latin draft vocab, prompt lookup and temperature 1.0, which
+      <code>gufo bench</code> does not expose.
+    </div>
+  </section>
+
+  <footer>
+    Model snapshot 38bb39ee9782 · sequential sweep ·
+    reproduce with <code>tools/windows/bench-flash-next-context.ps1</code>
+  </footer>
+</main>
+</body>
+</html>

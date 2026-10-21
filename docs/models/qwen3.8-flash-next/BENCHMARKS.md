@@ -1,9 +1,11 @@
 # Qwen3.8 Flash-Next benchmarks
 
 AMD Strix Halo `gfx1151`, 128 GB unified memory. Unsloth `UD-Q4_K_XL` target and
-shared-Q8_0 MTP sidecar; Gufo uses adaptive MTP. HTTP, greedy, thinking off.
+shared-Q8_0 MTP sidecar; Gufo uses adaptive MTP. HTTP (direct `gufo bench` for
+the long-context sweep), greedy, thinking off.
 Gufo single-user MTP, concurrency, loading and llama.cpp MTP at 64K/128K:
-September 23, 2026; other results: September 22.
+September 23, 2026; other results: September 22; direct 8K-256K sweep:
+October 20, 2026; bubo comparison: October 21, 2026.
 llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
@@ -48,6 +50,96 @@ text, including Gufo predictor catch-up.
 <!-- /bench -->
 
 ![Single user, MTP](artifacts/charts/single-mtp.svg)
+
+## Long-context sweep, direct
+
+`gufo bench`, greedy, one process at a time (the 96 GB carve holds one Q4 model
+and its state). Unsloth `UD-Q4_K_XL` + shared-Q8_0 MTP, revision
+`38bb39ee97821de2c9009abb7e93950eec396e66`. Two timed repetitions after one
+untimed pass. Prefill and AR decode use an autoregressive session; MTP decode
+uses adaptive MTP (7 draft tokens, minimum 1).
+
+The 256K row prefill is 262,143 tokens and decode depth is 262,015: the
+262,144-token native context needs the extra slot for the next token and 128
+generated tokens. Other rows use the exact context.
+
+<!-- bench:context-sweep -->
+| Flash-Next Q4<br>Context (tokens) | Prefill pp (tok/s) | Decode AR (tok/s) | Decode MTP (tok/s) | MTP accepted |
+| ---: | ---: | ---: | ---: | ---: |
+| 8,192 | 1600.90 ± 13.44 | 26.70 ± 2.33 | 42.25 ± 0.42 | 59% (72/122) |
+| 32,768 | 1542.13 ± 2.74 | 27.16 ± 0.20 | 75.38 ± 0.97 | 94% (110/117) |
+| 131,072 | 1473.04 ± 1.73 | 25.24 ± 0.03 | 75.02 ± 0.96 | 100% (111/111) |
+| 262,144 | 1405.18 ± 0.57 | 23.88 ± 0.02 | 72.58 ± 0.91 | 100% (111/111) |
+<!-- /bench -->
+
+The bench prompt repeats a 20-token pattern. From 32K the model continues that
+pattern verbatim, so MTP accepts almost every draft and the MTP column is an
+upper bound for repeated text, not chat or code. The mixed-prompt MTP table
+above (28-35 tok/s at depth) is the realistic decode range; the AR column is
+the no-speculation reference.
+
+`start.cmd` additionally enables survival stopping, the Latin draft vocabulary
+and prompt lookup, and samples at temperature 1.0. `gufo bench` cannot set those
+switches, so served rates differ; measure those over HTTP with
+`tools/serving/gufo-serving-bench.py`.
+
+```powershell
+# Prefill C new tokens, then decode at depth C (AR), then with MTP.
+# C = 8192, 32768, 131072, 262144; use C-1 and C-129 at 256K.
+gufo bench -m $model -p C      -n 128 -d 0 -r 2 --temperature 0
+gufo bench -m $model -p 1      -n 128 -d C -r 2 --temperature 0
+gufo bench -m $model -p 1      -n 128 -d C -r 2 --temperature 0 `
+  --speculative mtp --mtp-model $mtp
+```
+
+`tools/windows/bench-flash-next-context.ps1` runs the whole sweep sequentially
+and writes one log per run to `artifacts/bench-context/`. One-page report:
+[bench-context.html](bench-context.html).
+
+Run notes for future sweeps:
+
+- Run one benchmark process at a time. The 96 GB GPU carve leaves no room for
+  two Q4 instances. Model loads observed here took 47-156 s, so a full sweep
+  costs tens of minutes even though the timed runs are short.
+- `-p` is new prefill work; `-d` is cached depth. Bench sizes the context as
+  `max(4096, depth + prompt + 1, max(depth, 16) + generation + 1)`. At the
+  native limit use prompt 262,143 and depth 262,015 with `-n 128`.
+- Flash-Next benches only support concurrency 1.
+- The checkpoint declares 262,144 context tokens; `start.cmd` serves 131,072 by
+  default. The sweep raises the server context per run.
+- About 26.8 GiB of the 103.7 GiB checkpoint is the PLE n-gram table, streamed
+  from disk. Roughly 76.9 GiB stays resident, which is why 256K state fits the
+  96 GB carve.
+- The script picks the newest Hugging Face snapshot that has both the first
+  `UD-Q4_K_XL` shard and the shared-Q8_0 MTP sidecar; override with `-Model`,
+  `-Mtp`, `-Sizes` or `-Repetitions`. Use `-Exe` for another engine binary, for
+  example `-Exe C:\dev\bubo\bin\bubo.exe -OutDir
+  artifacts\bench-context-bubo`.
+- 8K MTP acceptance (59%) is the only row below 90%. From 32K the fixed bench
+  pattern is repeated verbatim, so the MTP column is a repeated-text upper
+  bound, not chat or code throughput.
+
+### Bubo comparison
+
+Bubo `0.1.0` (`bubo-engine` 0.10.0, revision `3ff74dce`) on the same snapshot
+and bench command: greedy, one process at a time, two timed repetitions after
+one untimed pass. The 256K row uses the same 262,143 prompt and 262,015 depth.
+
+<!-- bench:bubo-context-sweep -->
+| Flash-Next Q4<br>Context (tokens) | Bubo pp | Gufo pp | Bubo AR | Gufo AR | Bubo MTP | Gufo MTP |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8,192 | 1540.60 ± 6.52 | 1600.90 ± 13.44 | 27.81 ± 0.08 | 26.70 ± 2.33 | 33.96 ± 0.21 | 42.25 ± 0.42 |
+| 32,768 | 1479.29 ± 3.27 | 1542.13 ± 2.74 | 27.52 ± 0.10 | 27.16 ± 0.20 | 67.36 ± 0.96 | 75.38 ± 0.97 |
+| 131,072 | 1381.13 ± 1.22 | 1473.04 ± 1.73 | 26.59 ± 0.04 | 25.24 ± 0.03 | 64.33 ± 0.65 | 75.02 ± 0.96 |
+| 262,144 | 1293.86 ± 1.87 | 1405.18 ± 0.57 | 25.74 ± 0.04 | 23.88 ± 0.02 | 61.84 ± 0.75 | 72.58 ± 0.91 |
+<!-- /bench -->
+
+All values are tok/s. Bubo prefill is 3.8-7.9% lower, AR decode is 1.3-7.8%
+higher, and MTP decode is 10.6-19.6% lower than Gufo across the sweep. The
+256K MTP run accepted 111/111 drafts (100%), so the repeated-text caveat above
+applies to both engines. Bubo's serving launcher also enables survival, Latin
+draft vocabulary, lookup and vision; these direct bench numbers do not.
+One-page report: [bench-context-bubo.html](bench-context-bubo.html).
 
 ## Multiple users, autoregressive
 
