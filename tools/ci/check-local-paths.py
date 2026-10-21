@@ -6,11 +6,13 @@ The tracked tree must stay reproducible anywhere: notes and scripts name
 directories with placeholders (%TEMP%, C:\\dev, ...) instead of one account name
 and one workstation layout. This check flags
 
-  * Windows user-profile paths (a drive letter, then \\Users\\<name>), and
+  * Windows user-profile paths (a drive letter, then `\\Users\\<name>` or
+    `/Users/<name>`), and
   * any path under a parent directory of this checkout,
 
 in staged files (--staged, used by the pre-commit hook), in named files, or in
-every tracked file.
+every tracked file. Either slash counts, and UTF-16 companions (PowerShell
+redirection writes its logs that way) are read by dropping the NUL bytes.
 """
 
 import argparse
@@ -21,15 +23,16 @@ from pathlib import Path
 
 
 def workspace_patterns(root: Path) -> list:
-    """Profile paths plus the Windows ancestors of this checkout."""
-    patterns = [re.compile(r"[A-Za-z]:\\Users\\[^\\\s\"'`<>|]+", re.IGNORECASE)]
+    """Profile paths plus the Windows ancestors of this checkout, either slash."""
+    patterns = [re.compile(r"[A-Za-z]:[\\/]Users[\\/][^\\/\s\"'`<>|]+", re.IGNORECASE)]
     for parent in root.parents:
         text = str(parent)
         if re.fullmatch(r"[A-Za-z]:[\\/]", text):
             continue  # a drive root is nobody's personal directory
-        if not re.match(r"[A-Za-z]:\\", text):
+        if not re.match(r"[A-Za-z]:[\\/]", text):
             continue  # a POSIX path, or the relative tail of the checkout
-        patterns.append(re.compile(re.escape(text) + r"[\\/]", re.IGNORECASE))
+        for form in dict.fromkeys([text, text.replace("\\", "/")]):
+            patterns.append(re.compile(re.escape(form) + r"[\\/]", re.IGNORECASE))
     return patterns
 
 
@@ -59,9 +62,9 @@ def main() -> int:
             data = (root / name).read_bytes()
         except OSError:
             continue
-        if b"\x00" in data[:8192]:
-            continue
-        text = data.decode("utf-8", "replace")
+        # latin-1 never fails on odd bytes; dropping the NUL bytes turns a
+        # PowerShell-redirected UTF-16 log back into searchable ASCII.
+        text = data.replace(b"\x00", b"").decode("latin-1") if b"\x00" in data else data.decode("latin-1")
         matches = []
         for pattern in patterns:
             matches.extend(pattern.finditer(text))
