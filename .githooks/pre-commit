@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refuse commits that would publish a personal machine path.
+# Enable with: git config core.hooksPath .githooks
+for py in python python3 py; do
+  # -c import: the Windows Store python3 stub answers `command -v` but cannot run scripts.
+  if command -v "$py" >/dev/null 2>&1 && "$py" -c "import sys" >/dev/null 2>&1; then
+    exec "$py" tools/ci/check-local-paths.py --staged
+  fi
+done
+echo "[check-local-paths] python not found; staged-path check skipped" >&2

@@ -1,7 +1,7 @@
 # start-gufo-flash-next.ps1 - bosgame launcher for the pixmaate/gufo Windows port.
 # Wraps tools\windows\run-flash-next-xl.ps1 via the C:\gufo-win junction
 # so every path the engine sees is SPACE-FREE (the build/compile system chokes on
-# the space in "C:\dev\..."; see workspace AGENTS.md round 40).
+# paths with spaces; see workspace AGENTS.md round 40).
 #
 #   start-gufo-flash-next.bat                          double-click = serve (thinking on, adaptive MTP)
 #   powershell -File .\start-gufo-flash-next.ps1 -Think off    instruct mode (temp 0.7/top-p 0.8)

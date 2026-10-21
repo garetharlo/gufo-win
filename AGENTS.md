@@ -68,6 +68,9 @@ quality; successful optimizations become the default, without extra switches.
 - Push to `origin` (`https://github.com/jaacMusic/gufo-win.git`). After rewriting
   history use `git push --force-with-lease origin main` and confirm the remote tip
   with `gh api repos/jaacMusic/gufo-win/commits/main --template "{{.commit.author.name}} {{.commit.author.email}}"`.
+- Never publish a personal machine path: notes and scripts name directories with
+  placeholders such as `%TEMP%` and `C:\dev`. `git config core.hooksPath .githooks`
+  installs the pre-commit hook running `tools/ci/check-local-paths.py --staged`.
 - Follow Conventional Commits with a single-line message.
 - Prefer `jj` when available (`jj version`); otherwise use Git.
 - Follow the user's remote workflow and preserve unrelated work.
