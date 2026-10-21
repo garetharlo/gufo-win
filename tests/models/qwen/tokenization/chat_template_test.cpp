@@ -233,8 +233,11 @@ void TestRenderedPromptBoundFollowsContext() {
   const std::vector<ChatMessage> messages = {
       {ChatRole::kUser, std::string(1100000, 'a'), "", ""}};
   ChatTemplateOptions options;
+  Expect(QwenChatTemplate::Render(messages, options).has_value(),
+         "the default 8 MiB bound admits a full-context prompt");
+  options.max_output_bytes = kMiB;
   Expect(!QwenChatTemplate::Render(messages, options).has_value(),
-         "the default 1 MiB bound still refuses");
+         "a 1 MiB bound refuses the same prompt");
   options.max_output_bytes = RenderedPromptBoundBytes(262144);
   Expect(QwenChatTemplate::Render(messages, options).has_value(),
          "a context-sized bound admits a prompt the context can hold");
