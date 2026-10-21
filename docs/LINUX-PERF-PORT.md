@@ -409,7 +409,7 @@ the stale `continuation_adapter`/`continuation_probe` targets from
 #603 port but the CMake refs survived — Linux test configure would fail).
 
 Windows gates: single-session greedy haiku and sampled (t 0.8, seed 7)
-byte-identical vs `a639b18` base. Earlier multi-session bench attempts
+byte-identical vs `eb2a6a4` base. Earlier multi-session bench attempts
 produced no rows: root cause `serving_bench.py --quick` without `--suite`
 selects zero cases; also pass `--gufo .\gufo.exe` on Windows (the
 `./result/bin/gufo` fingerprint default does not exist here).
@@ -452,7 +452,7 @@ out-of-place kernel args and the `kLazyRecurrentSave` branches are gone;
 `RestoreState` is the upstream live/saved buffer swap. The separate Windows
 SDMA `LaunchDeviceCopy27` workaround is kept (snapshot copies, unrelated).
 
-Gates: Qwen3.8-27B Q4_K_S greedy haiku byte-identical vs `4b80084`; Flash-Next
+Gates: Qwen3.8-27B Q4_K_S greedy haiku byte-identical vs `bbf7d28`; Flash-Next
 UD-Q4_K_XL + MTP speculative greedy identical (shared speculative_verifier
 paths). Plain bench neutral (pp2048 ~428, tg128 ~12.4 both exes) — the copy
 elimination only shows under speculative/served 27B decode, and there is no
@@ -913,7 +913,7 @@ concurrency via `draft_length_.Choose(cap, tokens, policy_concurrency)` with
 snapshot header, bump-checked). Fork merge note: kept the fork-only `survival`
 branch ahead of `Choose`; `batch_drafts` short-circuit unchanged.
 
-Gates: greedy MTP haiku byte-identical vs `eafe1e2` base; single-session
+Gates: greedy MTP haiku byte-identical vs `414d481` base; single-session
 speculative bench neutral (tg128 38.2 vs 38.3, d32K 78.6 vs 78.7); 4-session
 greedy serve A/B 2x2 interleaved neutral within run-to-run drift (aggregate
 ~50.0 vs ~50.5 tok/s, ±3 noise). No regression; kept for upstream parity —
@@ -951,7 +951,7 @@ engine gathers n-gram rows for the *next* chunk while the current one runs, and
 the QwenFlashNext runner passes that span as `Sync`'s next-chunk hint. The serve
 layer was hand-ported (3 files diverged); dropped upstream's `OwnsSnapshot`
 (fork has no `SnapshotState`). Verified: `--validate-prefill 64` rmse 0.28 /
-cosine 1.00 / max 1.30; greedy haiku byte-identical vs `83d5745` base;
+cosine 1.00 / max 1.30; greedy haiku byte-identical vs `772061d` base;
 interleaved A/B neutral (the win is disk-cache overlap under `--cache-disk`
 serving, not plain bench). Metrics appear as `ngram_rows=`/`ngram_dedup_rows=`/
 `ngram_cache_hits=`/`ngram_disk_reads=` in generation details.

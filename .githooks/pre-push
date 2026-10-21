@@ -1,0 +1,24 @@
+#!/bin/sh
+# Refuse to publish history that contains a personal machine path.
+# The pre-commit hook only sees what is staged; this sees every file version the
+# push would publish, including commits made with --no-verify or by other tools.
+python=
+for candidate in python python3 py; do
+  # -c import: the Windows Store python3 stub answers `command -v` but cannot run scripts.
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "import sys" >/dev/null 2>&1; then
+    python=$candidate
+    break
+  fi
+done
+if [ -z "$python" ]; then
+  echo "check-local-paths: no python found, skipping the pre-push check" >&2
+  exit 0
+fi
+
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue  # branch or tag deletion
+  "$python" tools/ci/check-local-paths.py --pushed "$local_sha" || status=1
+done
+exit $status
