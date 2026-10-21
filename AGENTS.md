@@ -62,6 +62,12 @@ quality; successful optimizations become the default, without extra switches.
 - Keep model code, tests, tools and numerical contracts with their model.
 - Use one canonical long option and backend name per behavior; avoid aliases.
 - Use `gh` for GitHub operations after checking `gh auth status`.
+- Push as `jaacMusic <juan.avila97@gmail.com>`: the repo-local `user.name` and
+  `user.email` are already set to it, and `git log -1 --format="%an <%ae>"` shows
+  whether the newest commit still matches before pushing.
+- Push to `origin` (`https://github.com/jaacMusic/gufo-win.git`). After rewriting
+  history use `git push --force-with-lease origin main` and confirm the remote tip
+  with `gh api repos/jaacMusic/gufo-win/commits/main --template "{{.commit.author.name}} {{.commit.author.email}}"`.
 - Follow Conventional Commits with a single-line message.
 - Prefer `jj` when available (`jj version`); otherwise use Git.
 - Follow the user's remote workflow and preserve unrelated work.

@@ -12,7 +12,7 @@ TheRock ROCm 10.0.0 / clang 23 toolchain used for the Windows build.
 - Review clone: `%TEMP%\opencode\gufo-linux`
   (HEAD `270b533`, v0.18.0 at review time)
 - Local base: upstream `fee9d2a` (PR #314 fix)
-- Local Windows HEAD at review: `2eb0778`
+- Local Windows HEAD at review: `c85aada`
 - Local fork already has Windows-specific work in
   [WINDOWS.md](WINDOWS.md): copy kernels, recorded rollback, flag waits,
   fast sampling, fused HC down, hot-first upload, and 128 n-gram readers.
@@ -39,7 +39,7 @@ The user's target is the upstream Flash-Next table in
 `docs/models/qwen3.8-flash-next/BENCHMARKS.md` (upstream `fec4759d`,
 October 18 2026), measured on the same gfx1151 host with the same
 `UD-Q4_K_XL` target and shared-Q8_0 MTP sidecar. Current local numbers
-(fork `2eb0778` + Tier 1, `gufo bench`, one to two repetitions):
+(fork `c85aada` + Tier 1, `gufo bench`, one to two repetitions):
 
 | metric | upstream | local | local/upstream |
 | --- | ---: | ---: | ---: |
@@ -188,7 +188,7 @@ Acceptance: first-prompt latency drops; plans still exact-shape.
 
 ### [x] #613 — copy repeated context into MTP drafts (prompt lookup)
 
-Implemented in the fork before upstream (`ae59401`): `prompt_lookup.hpp`
+Implemented in the fork before upstream (`5936051`): `prompt_lookup.hpp`
 (greedy/sampled gates, resume-after-edit, snapshot state), engine/CLI/serve
 wiring, tests. Upstream `8497711` is the follow-up of this work. Remaining
 delta: upstream defaults it on for single-session MTP; the fork keeps it
@@ -267,7 +267,7 @@ Acceptance: bit-identical outputs; measure tg at d0/32K, single and 4 sessions.
 Windows port log (complete; the batched attention loads and
 `RmsNormCachedKernel` were dropped after measurement, see below):
 
-- [x] Stage 1, all eight `mmq/*` files (`5749c46`): a three-way merge against
+- [x] Stage 1, all eight `mmq/*` files (`ecab25e`): a three-way merge against
   `7e4621c^` (base) and `7e4621c` (theirs) is clean for every file once the
   blobs' LF is matched to the working tree's CRLF; the result is byte-equal to
   upstream's post-state for those files. Brings `q4_K_scale_pair` (both Q4_K
@@ -282,7 +282,7 @@ Windows port log (complete; the batched attention loads and
   `gufo-622-lists`. Interleaved `-p 2048 -n 16 -d 0,32768 -r 2`: tg16 d0
   28.19/28.20 -> 28.22/28.30, tg16 d32K 25.89/26.03 -> 26.15/26.18 (+0.8%),
   pp2048 d0 1745.67/1733.04 -> 1735.43/1729.14 (noise). Kept.
-- [x] Stage 2a (`d923796`): the top-of-file decode helpers plus every
+- [x] Stage 2a (`376df07`): the top-of-file decode helpers plus every
   `__shfl_xor` in `kernels.hip.cpp` (22 sites: `WaveSum`, `BlockSum`,
   `BlockMax`, the quantize kernels' `max_abs` scans, `GdnKernel`,
   `GdnEpilogueKernel`, `SelectMarkKernel`, `RouterTopKKernel`, the argmax
@@ -298,7 +298,7 @@ Windows port log (complete; the batched attention loads and
   26.15/26.08 -> 26.54/26.51 (+1.4%), pp2048 d0 1742.19/1716.73 ->
   1726.39/1724.55 (noise), pp2048 d32K 1572.79/1565.14 -> 1576.84/1570.90
   (+0.3%). Kept.
-- [x] Stage 2b (`5a29fee`): `HcMixEpilogueKernel` is now templated on
+- [x] Stage 2b (`0aa4c68`): `HcMixEpilogueKernel` is now templated on
   `kStreams` with the model's four-stream shape launched as `<4>` (every
   stream read issued up front, the inject weights cached before the `mixed`
   store, the sums still running stream by stream in order) and gains the
@@ -331,7 +331,7 @@ Windows port log (complete; the batched attention loads and
   changes, and pinning it would need a per-element barrier. Reverted; the
   hunk stays unported. The remaining vector-load hunks were part of that
   batch.
-- [x] Stage 3 (`4da5063`): the executor fused Q8_1 producers. `HcCombineQ8_1`
+- [x] Stage 3 (`d193da2`): the executor fused Q8_1 producers. `HcCombineQ8_1`
   writes the norm's unpadded Q8_1 rows out of the combine; the plain
   `HcMixEpilogue` writes `mixed`'s rows (the `mixed_q8` output stage 2b
   reserved); `GdnEpilogueKernel` writes the F32 ssm rows' rows (new trailing
@@ -366,7 +366,7 @@ Windows port log (complete; the batched attention loads and
   kept, as this tree already had it) 29.19 / 27.07, inside the run spread, so
   the smaller change stayed and the kernel, its wrapper, the declaration and
   the `lo_q8_1` scratch allocation were removed.
-- `git merge-file` against base `fee9d2a` (fork HEAD `2eb0778`, upstream `7e4621c`)
+- `git merge-file` against base `fee9d2a` (fork HEAD `c85aada`, upstream `7e4621c`)
   over the commit's 13 `src/` files: `batch.cpp`, `kernels.hpp`, all of
   `mmq/*` merge clean; `kernels.hip.cpp` has 1 comment-only conflict;
   `executor.{cpp,hpp}` have 15 conflicts.
@@ -409,7 +409,7 @@ the stale `continuation_adapter`/`continuation_probe` targets from
 #603 port but the CMake refs survived — Linux test configure would fail).
 
 Windows gates: single-session greedy haiku and sampled (t 0.8, seed 7)
-byte-identical vs `cdde3e4` base. Earlier multi-session bench attempts
+byte-identical vs `afd44b4` base. Earlier multi-session bench attempts
 produced no rows: root cause `serving_bench.py --quick` without `--suite`
 selects zero cases; also pass `--gufo .\gufo.exe` on Windows (the
 `./result/bin/gufo` fingerprint default does not exist here).
@@ -452,7 +452,7 @@ out-of-place kernel args and the `kLazyRecurrentSave` branches are gone;
 `RestoreState` is the upstream live/saved buffer swap. The separate Windows
 SDMA `LaunchDeviceCopy27` workaround is kept (snapshot copies, unrelated).
 
-Gates: Qwen3.8-27B Q4_K_S greedy haiku byte-identical vs `b054756`; Flash-Next
+Gates: Qwen3.8-27B Q4_K_S greedy haiku byte-identical vs `aa41c88`; Flash-Next
 UD-Q4_K_XL + MTP speculative greedy identical (shared speculative_verifier
 paths). Plain bench neutral (pp2048 ~428, tg128 ~12.4 both exes) — the copy
 elimination only shows under speculative/served 27B decode, and there is no
@@ -548,7 +548,7 @@ stack, so checkpoint code is dropped from every slice.
   loss; reverted. Suspect the un-rounded `select_chunk` (larger launches at
   depth) rather than the packed loads.
 - [x] `RoutedPadBounds` clears padding in-kernel, dropping two
-  `hipMemsetAsync` calls. Landed `6fd51ed`. Gates: `--validate-prefill 64`
+  `hipMemsetAsync` calls. Landed `3feed5f`. Gates: `--validate-prefill 64`
   rmse 0.39 / cosine 0.99 / max 1.88, haiku and 1,951-token greedy identical.
   Measured same session, `gufo bench -p 2048 -n 16 -d 0,32768,131072 -r 2`,
   interleaved vs `gufo-518-q8b.exe`: tg16 d32K 26.99/27.22 vs 26.90/26.95,
@@ -582,7 +582,7 @@ PLE upload copy and the failure-path pinned-buffer race fix.
 
 GDN slice measured, same session, `gufo bench -p 2048 -n 16 -d 0,32768 -r 3`:
 
-| cell | baseline `2eb0778`+tier1+#421+#463 | GDN slice | delta |
+| cell | baseline `c85aada`+tier1+#421+#463 | GDN slice | delta |
 | --- | ---: | ---: | ---: |
 | pp2048 d0 | 1629.89 (1637.50 / 1622.28) | **1658.43** | +1.75% |
 | pp2048 d32K | 1491.94 (1497.31 / 1486.57) | **1516.97** | +1.7% |
@@ -627,7 +627,7 @@ exists here as `keep_rollback_rows`; kernels only.
   1403.28±11.50 (all neutral vs the selection slice), **tg16 d128K 23.57±0.32
   vs 23.77±0.36 (+0.8%)**, tg d0/d32K neutral. Greedy haiku identical
   ('Time writes in the wet.'); `--validate-prefill 64` rmse 0.38 cosine 0.99
-  max 1.96. Rollback: revert d6319c5.
+  max 1.96. Rollback: revert 8acc228.
 - [x] Dense prefill attention per-tile overhead + sparse softmax masking +
       pinned PV WMMAs (WmmaCausalAttentionKernel slice). First port (while the
       kernel still had a single `kv_lds`) measured neutral and was reverted.
@@ -643,10 +643,10 @@ exists here as `keep_rollback_rows`; kernels only.
       reversed-order pass 1494.69/1492.05 vs 1478.14/1472.58), tg16 neutral
       at all depths. Kept.
 
-Measured (commit `0857383`, bench `-p 2048 -n 16 -r 3` / `-r 2` at d128K):
+Measured (commit `c474f04`, bench `-p 2048 -n 16 -r 3` / `-r 2` at d128K):
 pp2048 d0 1667.06±6.79 (neutral), d32K 1522.05±4.81 (neutral), d128K
 **1414.03±24.54 vs 1391.00** (+1.7%), tg16 neutral at all depths. Greedy
-haiku identical ("Time writes in the wet."). Rollback: revert `0857383`.
+haiku identical ("Time writes in the wet."). Rollback: revert `c474f04`.
 
 ### [x] #470 - 4096-token prefill chunks + overlapped n-gram gather
 
@@ -716,11 +716,11 @@ fragments, deferred residual in MoE combine, 128×128 router/GDN tiles,
 128-token gate/up and 64-token down tiles, tail kernel for up to 16 tokens past
 a tile, software-pipelined attention, GDN q/k in registers.
 
-- [x] **128×128 router/GDN tiles** (`d61b82a`): `UnquantizedF16Gemm` gains a
+- [x] **128×128 router/GDN tiles** (`96949f1`): `UnquantizedF16Gemm` gains a
   `batch >= 1024` branch launching `DenseF16GEMMKernel<128,128,...>`; the
   64×64 path is unchanged for narrow batches. Exact: greedy haiku and
   `--validate-prefill 64` (rmse 0.42, cosine 0.99, max 2.10) both identical
-  to `5629bc7`. Measured: pp2048 d0 1667.03±6.03 (neutral), d32K
+  to `b0c6897`. Measured: pp2048 d0 1667.03±6.03 (neutral), d32K
   1523.20±5.28 (+0.3% over 1518.53), tg neutral.
 - [x] **deferred residual + inject partials in the combines**: `HcCombineF16`
   gains `defer_w`/`inject_out`/`inject_w`, `HcCombineMoeF16` gains
@@ -746,7 +746,7 @@ a tile, software-pipelined attention, GDN q/k in registers.
       1559.77 vs 1576.35 (mean 1559 vs 1570, ~0.7% slower). No win on this GPU;
       reverted.
 - [x] **register-resident Q8_0 SSM fragments + 4-channel boundary
-  convolution** (`b2ed28c`): `DenseF16GEMMKernel` gains `kRegisterWeights`
+  convolution** (`1967a60`): `DenseF16GEMMKernel` gains `kRegisterWeights`
   (`kSsmConv`): the SSM wave keeps its decoded F16 K16 fragments in registers
   (`own_a_lo/hi`) and takes the peer half from `XorLane(..., 16)` instead of
   reading them back from LDS, which also drops the SSM weight plane from the
@@ -913,7 +913,7 @@ concurrency via `draft_length_.Choose(cap, tokens, policy_concurrency)` with
 snapshot header, bump-checked). Fork merge note: kept the fork-only `survival`
 branch ahead of `Choose`; `batch_drafts` short-circuit unchanged.
 
-Gates: greedy MTP haiku byte-identical vs `2d9027a` base; single-session
+Gates: greedy MTP haiku byte-identical vs `f3770ec` base; single-session
 speculative bench neutral (tg128 38.2 vs 38.3, d32K 78.6 vs 78.7); 4-session
 greedy serve A/B 2x2 interleaved neutral within run-to-run drift (aggregate
 ~50.0 vs ~50.5 tok/s, ±3 noise). No regression; kept for upstream parity —
@@ -951,7 +951,7 @@ engine gathers n-gram rows for the *next* chunk while the current one runs, and
 the QwenFlashNext runner passes that span as `Sync`'s next-chunk hint. The serve
 layer was hand-ported (3 files diverged); dropped upstream's `OwnsSnapshot`
 (fork has no `SnapshotState`). Verified: `--validate-prefill 64` rmse 0.28 /
-cosine 1.00 / max 1.30; greedy haiku byte-identical vs `6747b64` base;
+cosine 1.00 / max 1.30; greedy haiku byte-identical vs `04b9eda` base;
 interleaved A/B neutral (the win is disk-cache overlap under `--cache-disk`
 serving, not plain bench). Metrics appear as `ngram_rows=`/`ngram_dedup_rows=`/
 `ngram_cache_hits=`/`ngram_disk_reads=` in generation details.
@@ -1104,7 +1104,7 @@ belongs to the tiered cache stack the fork does not have.
 Host: TheRock clang 23 / ROCm 7.15, gfx1151. Model
 `unsloth/Qwen3.8-Flash-Next-GGUF` UD-Q4_K_XL, plus
 `MTP\mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf` where a row says MTP.
-Baseline binary = fork HEAD `2eb0778`; "tier 1" = `#459`/`#481`/`#482`/`#633
+Baseline binary = fork HEAD `c85aada`; "tier 1" = `#459`/`#481`/`#482`/`#633
 Prepare` applied. Both binaries keep identical compiler and dependencies.
 
 ### Tier 1, `gufo bench -p 16,64,2048 -n 16 -r 1 --validate-prefill 64`
