@@ -777,7 +777,7 @@ struct TextRunnerPool::Request::Impl {
       }
       const auto saved = disk_store->SaveAsync(
           runner, {prefix.begin(), prefix.end()}, std::move(snapshot),
-          {identity.begin(), identity.end()});
+          {identity.begin(), identity.end()}, {}, /*shared_prefix=*/true);
       if (saved != 0) {
         ++snapshot_metrics.shared_prefix_snapshots;
         snapshot_metrics.shared_prefix_bytes += saved;
