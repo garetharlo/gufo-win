@@ -3240,13 +3240,15 @@ bool InferenceBackend::load(std::shared_ptr<const hip::QwenGpuModel> model,
     }
 
     auto new_state = std::make_shared<Impl::State>();
+    // Read before the move below empties `model`.
+    const bool supports_images = model->VisionEncoder() != nullptr;
     auto runner = std::make_shared<QwenTextRunner>(
         std::move(model), max_context, std::move(dflash_model),
         speculative_options, disk_cache_config.model_artifact_fingerprint,
         disk_cache_config.draft_model_artifact_fingerprint);
     new_state->model_id = runner->Descriptor().model_id;
     new_state->max_context = max_context;
-    new_state->supports_images = model->VisionEncoder() != nullptr;
+    new_state->supports_images = supports_images;
     std::optional<TextRunnerDiskCacheOptions> runner_disk_cache;
     if (DiskCacheEnabled(disk_cache_config)) {
       runner_disk_cache = TextRunnerDiskCacheOptions{
