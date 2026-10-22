@@ -45,24 +45,38 @@ Measured on this machine: Windows 11, AMD Strix Halo `gfx1151`, 128 GB unified
 memory, 96 GB dedicated carve; unsloth `UD-Q4_K_XL` + shared-Q8_0 MTP; direct
 `gufo bench`, greedy, two timed repetitions after one untimed pass.
 
-- **Long-context sweep, 8K to 256K:** prefill **1,600.90 → 1,405.18 tok/s**, AR
-  decode **27.16 → 23.88 tok/s**, adaptive-MTP decode up to **75.38 tok/s**.
-  The 256K context holds the ~89 GiB model and state fully inside the 96 GB
-  carve, so it decodes at full speed. Full table and settings:
-  [context sweep](docs/models/qwen3.8-flash-next/bench-context.html).
-- **MTP column is an upper bound:** the bench prompt repeats a 20-token
-  pattern, and from 32K the model repeats it verbatim (drafts accepted 94–100%).
-  Realistic mixed-prompt MTP decode at depth is **28–35 tok/s**; the AR column
-  is the no-speculation reference. The 8K row accepts only 59%.
-- **Windows decode switches stay high-speed and bit-identical:** with every
-  Windows switch on, logit dumps are bit-identical at all 4,418 positions and
-  seeded decode is byte-identical to the Linux path, which decodes **7.6–9.5%
-  slower** (sampled probes, prose / code / reasoning: **34.5 / 37.2 / 48.3**
-  tok/s against **32.0 / 34.3 / 44.1**).
-- **Loading:** the 103.7 GiB checkpoint keeps ~76.9 GiB resident and streams
-  its ~26.8 GiB n-gram table from disk; with a 96 GB carve loads in ~30 s. A
-  64 GB carve works but loads ~10× slower and reads weights beyond the carve
-  6–22% slower.
+Long-context sweep, 8K to 256K:
+
+| Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
+| --- | ---: | ---: | ---: | ---: |
+| 8,192 | 1,600.90 | 26.70 | 42.25 | 59% |
+| 32,768 | 1,542.13 | 27.16 | 75.38 | 94% |
+| 131,072 | 1,473.04 | 25.24 | 75.02 | 100% |
+| 262,144 | 1,405.18 | 23.88 | 72.58 | 100% |
+
+The 256K context holds the ~89 GiB model and state fully inside the 96 GB
+carve, so it decodes at full speed. Full table with error bars and settings:
+[context sweep](docs/models/qwen3.8-flash-next/bench-context.html).
+
+The MTP column is an upper bound: the bench prompt repeats a 20-token pattern,
+and from 32K the model repeats it verbatim (drafts accepted 94–100%).
+Realistic mixed-prompt MTP decode at depth is **28–35 tok/s**; the AR column
+is the no-speculation reference. The 8K row accepts only 59%.
+
+Windows decode switches stay high-speed and bit-identical: with every Windows
+switch on, logit dumps are bit-identical at all 4,418 positions and seeded
+decode is byte-identical to the Linux path (sampled probes):
+
+| Prompt | Windows (tok/s) | Linux (tok/s) |
+| --- | ---: | ---: |
+| prose | 34.5 | 32.0 |
+| code | 37.2 | 34.3 |
+| reasoning | 48.3 | 44.1 |
+
+Loading: the 103.7 GiB checkpoint keeps ~76.9 GiB resident and streams its
+~26.8 GiB n-gram table from disk; with a 96 GB carve loads in ~30 s. A 64 GB
+carve works but loads ~10× slower and reads weights beyond the carve 6–22%
+slower.
 
 Measured sampling options (single-session decoding, sampled, thinking on,
 3 seeds per prompt, Windows):
