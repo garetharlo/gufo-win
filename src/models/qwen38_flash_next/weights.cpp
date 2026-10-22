@@ -235,12 +235,16 @@ struct Binder {
 
 }  // namespace
 
-std::size_t TensorRef::RowBytes() const noexcept {
+std::size_t RowBytes(GgmlType type, std::uint64_t cols) noexcept {
   const Format f = FormatOf(type);
   if (f.block == 0 || cols % f.block != 0) {
     return 0;
   }
   return static_cast<std::size_t>(cols / f.block) * f.bytes;
+}
+
+std::size_t TensorRef::RowBytes() const noexcept {
+  return gufo::models::qwen38_flash_next::RowBytes(type, cols);
 }
 
 std::optional<ModelWeights> ModelWeights::Bind(const core::GgufReader& reader,

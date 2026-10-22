@@ -155,14 +155,18 @@ public:
   /// chain (anchor and drafts); `committed` must extend the indexed prefix.
   [[nodiscard]] Match Find(std::span<const std::int32_t> committed,
                            std::span<const std::int32_t> tail,
-                           std::size_t minimum = kMinMatch) const {
+                           std::size_t minimum = kMinMatch,
+                           bool require_resume = false) const {
     const std::size_t context = committed.size() + tail.size();
     const std::size_t available =
         request_start_ == kNoResume
             ? context
             : context - std::min(context, request_start_);
     const std::size_t max_match = std::min(kMaxMatch, available);
-    if (max_match < kKeyTokens) {
+    // A caller that replaces a neural proposal needs both an established
+    // copy and a full match, not the short resume gate.
+    if (max_match < kKeyTokens ||
+        (require_resume && (resume_ == kNoResume || max_match < minimum))) {
       return {};
     }
     const auto at = [&](std::size_t i) {
@@ -185,8 +189,11 @@ public:
       const bool resumes = resume_ != kNoResume &&
                            end + kResumeBack >= resume_ &&
                            end <= resume_ + kResumeWindow;
-      if (end < prev_.size() && length > best.length &&
-          (length >= minimum || (resumes && length >= kResumeMinMatch))) {
+      const bool allowed =
+          require_resume
+              ? resumes && length >= minimum
+              : length >= minimum || (resumes && length >= kResumeMinMatch);
+      if (end < prev_.size() && length > best.length && allowed) {
         best = {end, length};
       }
       end = prev_[end];

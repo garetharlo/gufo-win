@@ -35,6 +35,10 @@ struct MtpTrace {
   }
 };
 
+/// Encoded bytes of one row of `cols` elements in `type` (0 when unsupported).
+[[nodiscard]] std::size_t RowBytes(core::GgmlType type,
+                                   std::uint64_t cols) noexcept;
+
 /// Non-owning view of one GGUF tensor. `rows` x `cols` follows the GGUF
 /// convention: cols (ne[0]) is the contiguous reduction dimension, rows
 /// (ne[1]) the output dimension, and `experts` (ne[2]) stacks whole matrices.

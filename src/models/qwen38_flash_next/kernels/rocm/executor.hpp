@@ -252,6 +252,8 @@ public:
     Session* session;
     std::span<const std::int32_t> tokens;
     std::int32_t hidden_row;
+    /// Store only the persistent KV (see MtpOutput::kv_only).
+    bool kv_only{false};
   };
   /// Copies output() rows `ids` into the session's draft table from slot
   /// `first` on. Enqueued on stream(); never during graph capture.

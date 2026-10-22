@@ -661,6 +661,7 @@ bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
           *session_, replay, hidden_row,
           {.token = propose && candidates == nullptr ? &draft_token_ : nullptr,
            .candidates = candidates,
+           .kv_only = !propose,
            .draft_subset = draft_subset},
           error_msg)) {
     return false;
@@ -669,9 +670,14 @@ bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
 }
 
 bool Session::DraftCatchUpBatch(std::span<const AdvanceRequest> requests,
-                                std::string* error_msg) {
+                                std::string* error_msg,
+                                std::span<const std::uint8_t> propose) {
   if (requests.empty())
     return true;
+  if (!propose.empty() && propose.size() != requests.size()) {
+    AssignError(error_msg, "draft catch-up head count differs from requests");
+    return false;
+  }
   auto& exec = *requests.front().session->model_->executor_;
   std::vector<std::vector<std::int32_t>> replays(requests.size());
   std::vector<rocm::Executor::MtpBatchItem> items;
@@ -685,7 +691,8 @@ bool Session::DraftCatchUpBatch(std::span<const AdvanceRequest> requests,
       return false;
     if (replays[i].empty())
       continue;
-    items.push_back({session.session_.get(), replays[i], hidden_row});
+    items.push_back({session.session_.get(), replays[i], hidden_row,
+                     propose.empty() || !propose[i]});
   }
   return items.empty() || exec.MtpForwardBatch(items, error_msg);
 }
@@ -921,7 +928,7 @@ void Session::AppendDraft(PendingDecode& pending) {
 }
 
 bool Session::AppendLookup(PendingDecode& pending, bool stop_at_eos,
-                           std::size_t minimum) {
+                           std::size_t minimum, bool require_resume) {
   const auto cap = pending.lookup_cap;
   if (pending.chain.size() >= cap) {
     return false;
@@ -932,7 +939,8 @@ bool Session::AppendLookup(PendingDecode& pending, bool stop_at_eos,
   const auto match =
       lookup_.Find(tokens_, pending.chain,
                    pending.sampled ? PromptLookup::kSampledMinMatch
-                                   : PromptLookup::kMinMatch);
+                                   : PromptLookup::kMinMatch,
+                   require_resume);
   if (match.length == 0) {
     return false;
   }
@@ -1106,8 +1114,10 @@ bool Session::PrepareDecode(const DecodeRequest& request,
     }
   }
   if (!defer_head) {
-    if (lookup && !sampled && AppendLookup(*pending, request.stop_at_eos, 3)) {
-      // Greedy copies can supply the whole chain without the neural head.
+    // Copies can supply the whole chain without the neural head. A sampled
+    // copy needs an established source and a full match: replacing the
+    // proposal on shared syntax alone regressed copying at temperature.
+    if (lookup && AppendLookup(*pending, request.stop_at_eos, 3, sampled)) {
       return true;
     }
     float alive = 1.0F;
@@ -1539,11 +1549,15 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
     }
   }
   std::vector<AdvanceRequest> catchup;
+  std::vector<std::uint8_t> propose;
   for (std::size_t i = 0; i < requests.size(); ++i) {
-    if (!pending[i].chain.empty())
+    if (!pending[i].chain.empty()) {
       catchup.push_back({requests[i].session, pending[i].chain.front()});
+      propose.push_back(pending[i].speculative &&
+                        pending[i].chain.size() < pending[i].width);
+    }
   }
-  if (!DraftCatchUpBatch(catchup, error_msg))
+  if (!DraftCatchUpBatch(catchup, error_msg, propose))
     return false;
   // Each round shares predictor projections across ready sessions.
   // Attention state, proposal distributions and RNG streams stay private.

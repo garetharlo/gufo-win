@@ -941,7 +941,36 @@ byte-identical; interleaved A/B (`pp2048,24576 -n 128 -d 0,32768 -r 2` ×2
 each): tg128@d32768 +3% (27.33/27.05 vs 26.35/26.31 both orders), prefill
 within noise.
 
-### [x] #683 — prefetch n-gram rows across cache checkpoints
+### [x] #699 - reduce Flash-Next sampled decoding overhead
+
+Upstream: `e060aee`, ported 2026-10-22. Only the slices the fork did not
+already have.
+
+- Vision RoPE at session creation: already present as `c2e114b`.
+- Compact sampled verification (`DistributionFromCandidates`, candidate-union
+  kernel, `SampledMtpCandidates`): not ported. The fork already reads GPU
+  top-64 candidate lists for sampled verification (`fast_sampling`,
+  `SamplerState::DistributionFromTop`/`SampleFromTop`,
+  `Executor::VerifyCandidates`/`DownloadVerification`, default on for Windows),
+  exact whenever no penalties are active. Upstream's remaining part is the
+  penalty union for penalty-configured sampling; that path keeps the exact
+  full-row scan here.
+- Ported: prompt lookup skips the neural proposal after an established sampled
+  copy (`Find(..., require_resume)`), and `kv_only` catch-up now actually skips
+  queries, attention, the output projection and FFN, for the single and the
+  batched predictor (the flag previously only changed a graph key). Prefill
+  catch-up sets it too, so prompt positions write only predictor KV and pooled
+  indexer keys. Supporting change: a host `RowBytes(GgmlType, cols)` helper,
+  and `PrepareAttention` accepts `heads == 0` for the K/V-only packed slice.
+- Verified: `--validate-prefill 64` identical (rmse 0.28, cosine 1.00, max
+  1.30); `--logit-eval` 865 tokens, 2 schedules, byte-identical dumps
+  (perplexity 13.480379 / 13.501446); greedy, sampled, sampled with penalties,
+  greedy `--prompt-lookup` and sampled `--prompt-lookup` texts identical.
+- A/B (2 interleaved rounds, mtp, `-p 2048,8192 -d 0 -n 64 -r 3`): pp2048
+  1618.28/1609.78 -> 1625.61/1622.84, pp8192 1555.70/1556.91 -> 1568.14/1564.88,
+  tg64 37.59/37.64 -> 37.62/37.47. Prefill +0.6%, decode neutral.
+
+### [x] #683 - prefetch n-gram rows across cache checkpoints
 
 Upstream: `62c840e`, ported 2026-10-20. `NgramTable::StartRead` gained a flat
 open-addressed dedup table (`first_rows_`, at most half full) plus per-sequence

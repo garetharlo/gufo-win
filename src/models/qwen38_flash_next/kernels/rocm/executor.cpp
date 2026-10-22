@@ -2690,7 +2690,8 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
     // the trunk residual is still in shared scratch. MtpBody reads that
     // residual into xn before reusing res for the predictor output.
     PrefillPhase draft_phase(false);
-    if (!MtpForward(session, tokens.subspan(1), 0, {}, error_msg, s_.res))
+    if (!MtpForward(session, tokens.subspan(1), 0, {.kv_only = true}, error_msg,
+                    s_.res))
       return false;
   }
   return true;
@@ -3477,6 +3478,14 @@ bool Executor::MtpForward(Session& session,
     AssignError(error_msg, "invalid MTP trace destinations");
     return false;
   }
+  if (output.kv_only &&
+      (hidden_row < 0 || output.token != nullptr ||
+       output.candidates != nullptr || output.trace != nullptr)) {
+    AssignError(error_msg,
+                "MTP cache-only forward requires a known hidden row and no "
+                "outputs");
+    return false;
+  }
   const std::uint32_t pos = session.mtp_.position;
   if (pos + n > session.max_context_) {
     AssignError(error_msg, "MTP context is full");
@@ -3618,8 +3627,43 @@ bool Executor::MtpBody(Session& session, std::uint32_t n, std::uint32_t pos,
   // At least 96 rows retain the wide mixer/projection arithmetic. Attention
   // still writes every KV/indexer row before the scratch view is narrowed.
   const auto skipped = last_only && n >= 224 ? (n - 96) / 128 * 128 : 0U;
-  if (!HcMix(l.hc_attn, s_.mtp_res, false, s_.mixed, s_.inject, n, error_msg) ||
-      !Attention(l, attn, s_.mixed, s_.block_out, n,
+  const bool cache_only = kv_only && !l.attn_qkv.empty();
+  if (!HcMix(l.hc_attn, s_.mtp_res, false, s_.mixed,
+             cache_only ? nullptr : s_.inject, n, error_msg)) {
+    return false;
+  }
+  if (cache_only) {
+    // Known trunk rows replace the predictor residual on the next forward.
+    // Only K/V and pooled indexer keys survive this catch-up. Slice the
+    // packed Q/gate/K/V weight without copying or changing its arithmetic.
+    auto kv = l.attn_qkv;
+    kv.data = static_cast<std::uint8_t*>(kv.data) +
+              std::size_t{2} * c.AttentionQDim() * RowBytes(kv.type, kv.cols);
+    kv.rows = 2 * c.AttentionKvDim();
+    const auto capacity =
+        IndexerCapacity(c, options_.max_batch, session.max_context_);
+    if (!Dense(kv, s_.mixed, s_.qg, n, error_msg) ||
+        !PrepareAttention(s_.qg, static_cast<std::uint32_t>(kv.rows), nullptr,
+                          l.attn_k_norm.f32(), nullptr, nullptr, attn.k_cache,
+                          attn.v_cache, n, 0, c.num_kv_heads, c.head_dim,
+                          c.rotary_dim, &session.control_->mtp_position,
+                          c.rope_theta, c.rms_eps, stream_, attn.rope) ||
+        !Dense(l.indexer_k, s_.mixed, s_.ik, n, error_msg)) {
+      AssignError(error_msg, "MTP cache projection failed");
+      return false;
+    }
+    StoreRows(s_.ik, attn.index_k, n, c.indexer_head_dim,
+              &session.control_->mtp_position, capacity, stream_);
+    if (pos + n > c.indexer_top_k) {
+      PoolIndexerBlocks(attn.index_k, l.indexer_k_norm.f32(), attn.block_k,
+                        &session.control_->mtp_blocks,
+                        &session.control_->mtp_position, n, pool_grid,
+                        c.compress_ratio, c.indexer_head_dim, c.rotary_dim,
+                        c.rope_theta, c.rms_eps, capacity, stream_, attn.rope);
+    }
+    return true;
+  }
+  if (!Attention(l, attn, s_.mixed, s_.block_out, n,
                  &session.control_->mtp_position, &session.control_->mtp_blocks,
                  pos, pool_grid, session.max_context_,
                  pos + n > c.indexer_top_k, error_msg, last_only, false,
