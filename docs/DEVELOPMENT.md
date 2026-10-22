@@ -133,6 +133,14 @@ maintained documents, resolves every local link and heading anchor offline, and
 parses fenced JSON blocks. Run `nix build .#checks.x86_64-linux.docs` for
 documentation-only changes.
 
+**Published paths.** `tools/ci/check-local-paths.py` refuses this account's
+profile path and any path under this checkout in text a push would publish —
+either slash form, and inside the UTF-16 logs PowerShell redirection writes.
+`git config core.hooksPath .githooks` runs it before a commit (`--staged`) and
+before a push (`--pushed`). Notes and scripts name directories with placeholders
+such as `%TEMP%` and `C:\dev`; build logs stay out of the tree
+(`/build-log*.txt` is ignored).
+
 ## Performance work
 
 Measure with `result/bin/gufo` from `nix build` or a `release` build, keeping
@@ -157,6 +165,11 @@ hosted selection is described in [testing](TESTING.md).
 - Prefer `jj` when available (`jj version`); otherwise use Git.
 - Follow Conventional Commits with a single-line message.
 - Use `gh` for GitHub operations after checking `gh auth status`.
+- History was rewritten twice (2026-10-21: personal paths in every commit,
+  2026-10-22: two accidentally committed build logs). Commit ids from before
+  those dates are stale — this document set and `docs/LINUX-PERF-PORT.md` were
+  re-pointed to the current ids — and pre-rewrite archives live outside the
+  repository.
 - Preserve unrelated work and stage only task-owned paths before Nix builds.
 
 ## Related documents
