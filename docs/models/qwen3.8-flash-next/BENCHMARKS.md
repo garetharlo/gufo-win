@@ -66,10 +66,10 @@ generated tokens. Other rows use the exact context.
 <!-- bench:context-sweep -->
 | Flash-Next Q4<br>Context (tokens) | Prefill pp (tok/s) | Decode AR (tok/s) | Decode MTP (tok/s) | MTP accepted |
 | ---: | ---: | ---: | ---: | ---: |
-| 8,192 | 1600.90 ± 13.44 | 26.70 ± 2.33 | 42.25 ± 0.42 | 59% (72/122) |
-| 32,768 | 1542.13 ± 2.74 | 27.16 ± 0.20 | 75.38 ± 0.97 | 94% (110/117) |
-| 131,072 | 1473.04 ± 1.73 | 25.24 ± 0.03 | 75.02 ± 0.96 | 100% (111/111) |
-| 262,144 | 1405.18 ± 0.57 | 23.88 ± 0.02 | 72.58 ± 0.91 | 100% (111/111) |
+| 8,192 | 1631.19 ± 10.97 | 28.27 ± 0.37 | 45.36 ± 1.45 | 64% (78/122) |
+| 32,768 | 1571.90 ± 2.11 | 27.19 ± 0.14 | 78.42 ± 2.72 | 100% (111/111) |
+| 131,072 | 1506.40 ± 0.25 | 25.41 ± 0.10 | 75.16 ± 2.21 | 100% (111/111) |
+| 262,144 | 1446.26 ± 2.00 | 24.09 ± 0.23 | 71.95 ± 2.11 | 100% (111/111) |
 <!-- /bench -->
 
 The bench prompt repeats a 20-token pattern. From 32K the model continues that
@@ -115,7 +115,7 @@ Run notes for future sweeps:
   `-Mtp`, `-Sizes` or `-Repetitions`. Use `-Exe` for another engine binary, for
   example `-Exe C:\dev\bubo\bin\bubo.exe -OutDir
   artifacts\bench-context-bubo`.
-- 8K MTP acceptance (59%) is the only row below 90%. From 32K the fixed bench
+- 8K MTP acceptance (64%) is the only row below 90%. From 32K the fixed bench
   pattern is repeated verbatim, so the MTP column is a repeated-text upper
   bound, not chat or code throughput.
 

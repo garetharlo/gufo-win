@@ -63,6 +63,6 @@ foreach ($size in $Sizes) {
   Invoke-Bench "pp-$name"  ($common + @("--n-prompt", "$prompt", "--n-depth", "0"))
   Invoke-Bench "tg-ar-$name" ($common + @("--n-prompt", "1", "--n-depth", "$depth"))
   Invoke-Bench "tg-mtp-$name" ($common + @("--n-prompt", "1", "--n-depth", "$depth",
-    "--speculative", "mtp", "--mtp-model", $Mtp))
+    "--speculative", "mtp", "--mtp-model", $Mtp, "--verbose"))
 }
 Write-Host "`nlogs: $OutDir" -ForegroundColor Green

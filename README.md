@@ -66,10 +66,10 @@ Long-context sweep, 8K to 256K:
 
 | Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
 | --- | ---: | ---: | ---: | ---: |
-| 8,192 | 1,600.90 | 26.70 | 42.25 | 59% |
-| 32,768 | 1,542.13 | 27.16 | 75.38 | 94% |
-| 131,072 | 1,473.04 | 25.24 | 75.02 | 100% |
-| 262,144 | 1,405.18 | 23.88 | 72.58 | 100% |
+| 8,192 | 1,631.19 | 28.27 | 45.36 | 64% |
+| 32,768 | 1,571.90 | 27.19 | 78.42 | 100% |
+| 131,072 | 1,506.40 | 25.41 | 75.16 | 100% |
+| 262,144 | 1,446.26 | 24.09 | 71.95 | 100% |
 
 The 256K context holds the ~89 GiB model and state fully inside the 96 GB
 carve, so it decodes at full speed. Full table with error bars and settings:
