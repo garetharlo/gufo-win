@@ -45,6 +45,23 @@ Measured on this machine: Windows 11, AMD Strix Halo `gfx1151`, 128 GB unified
 memory, 96 GB dedicated carve; unsloth `UD-Q4_K_XL` + shared-Q8_0 MTP; direct
 `gufo bench`, greedy, two timed repetitions after one untimed pass.
 
+October 2026 upstream sweep (v0.2.0): per-stream scratch arenas for the mmq
+kernels, K-order BF16 indexer projections, and occupancy-priced sampled MTP
+drafts landed with greedy output byte-identical to the previous release.
+Interleaved A/B versus v0.1.0 (`gufo bench -p 2048 -n 128 -r 1`, MTP):
+
+| metric | v0.1.0 | v0.2.0 | delta |
+| --- | ---: | ---: | ---: |
+| MTP tg128, depth 0 | 34.76 tok/s | 38.95 | **+12%** |
+| MTP tg128, depth 32768 | 75.62 tok/s | 79.27 | **+4.8%** |
+| MTP pp2048, depth 0 | 1588.89 tok/s | 1598.69 | +0.6% |
+| AR pp2048 / tg128 | 1619–1632 / 30.1–30.5 | 1636–1645 / 30.4–30.5 | neutral |
+| Sampled serving, 2 users, temp 1.0 | 34.53 tok/s | 36.48 | **+5.6%** |
+
+Draft acceptance was identical (63%) in the sampled A/B, so the decode gains
+are the ported fixes, not sampling luck. The long-context table below was
+measured on v0.1.0; expect the MTP column to shift up accordingly.
+
 Long-context sweep, 8K to 256K:
 
 | Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
