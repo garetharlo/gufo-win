@@ -12,6 +12,27 @@ containers. The Linux original lives at
 [upstream gufo](https://github.com/gufo-org/gufo), and the port details are in
 [docs/WINDOWS.md](docs/WINDOWS.md).
 
+## Headline results
+
+Qwen3.8-Flash-Next Q4 (`UD-Q4_K_XL` + MTP Q8_0), 128 GB unified memory with a
+96 GB dedicated carve; direct `gufo bench`, greedy, two timed repetitions.
+Long-context sweep, 8K to 256K (October 2026, v0.2.0):
+
+| Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
+| --- | ---: | ---: | ---: | ---: |
+| 8,192 | 1,631.19 | 28.27 | 45.36 | 64% |
+| 32,768 | 1,571.90 | 27.19 | 78.42 | 100% |
+| 131,072 | 1,506.40 | 25.41 | 75.16 | 100% |
+| 262,144 | 1,446.26 | 24.09 | 71.95 | 100% |
+
+The 256K context holds the ~89 GiB model and state fully inside the 96 GB
+carve, so it decodes at full speed. The MTP column is an upper bound: the
+bench prompt repeats a 20-token pattern and from 32K the model repeats it
+verbatim (drafts accepted 100%). Realistic mixed-prompt MTP decode at depth is
+**28–35 tok/s**; the AR column is the no-speculation reference. Full table
+with error bars and settings:
+[context sweep](docs/models/qwen3.8-flash-next/bench-context.html).
+
 
 ## Models and benchmarks
 
@@ -59,26 +80,7 @@ Interleaved A/B versus v0.1.0 (`gufo bench -p 2048 -n 128 -r 1`, MTP):
 | Sampled serving, 2 users, temp 1.0 | 34.53 tok/s | 36.48 | **+5.6%** |
 
 Draft acceptance was identical (63%) in the sampled A/B, so the decode gains
-are the ported fixes, not sampling luck. The long-context table below was
-measured on v0.1.0; expect the MTP column to shift up accordingly.
-
-Long-context sweep, 8K to 256K:
-
-| Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
-| --- | ---: | ---: | ---: | ---: |
-| 8,192 | 1,631.19 | 28.27 | 45.36 | 64% |
-| 32,768 | 1,571.90 | 27.19 | 78.42 | 100% |
-| 131,072 | 1,506.40 | 25.41 | 75.16 | 100% |
-| 262,144 | 1,446.26 | 24.09 | 71.95 | 100% |
-
-The 256K context holds the ~89 GiB model and state fully inside the 96 GB
-carve, so it decodes at full speed. Full table with error bars and settings:
-[context sweep](docs/models/qwen3.8-flash-next/bench-context.html).
-
-The MTP column is an upper bound: the bench prompt repeats a 20-token pattern,
-and from 32K the model repeats it verbatim (drafts accepted 94–100%).
-Realistic mixed-prompt MTP decode at depth is **28–35 tok/s**; the AR column
-is the no-speculation reference. The 8K row accepts only 59%.
+are the ported fixes, not sampling luck.
 
 Windows decode switches stay high-speed and bit-identical: with every Windows
 switch on, logit dumps are bit-identical at all 4,418 positions and seeded
