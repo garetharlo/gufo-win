@@ -322,7 +322,16 @@ TokenId SamplingDistribution::SampleResidual(
   if (!(sum > 0.0) || !std::isfinite(sum)) {
     return Sample(rng_state);
   }
-  return SamplingDistribution(std::move(residual), sum).Sample(rng_state);
+  // Walk the residual directly: sampling consumes no particular value order,
+  // so skip the sorted, re-normalized SamplingDistribution construction.
+  double sample = Uniform(rng_state) * sum;
+  for (const auto& entry : residual) {
+    sample -= entry.value;
+    if (sample < 0.0) {
+      return entry.token;
+    }
+  }
+  return residual.back().token;
 }
 
 static SamplingDistribution DistributionWithPenalties(
