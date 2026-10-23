@@ -19,6 +19,21 @@ void Require(bool condition, const char* message) {
     throw std::runtime_error(message);
 }
 
+void CheckPolicyConcurrency() {
+  // Greedy and unseeded sampled cycles price at the live occupancy; seeded
+  // sampled cycles and planned batches keep the configured row.
+  Require(qfn::MtpPolicyConcurrency(false, false, false, 1) == 1 &&
+              qfn::MtpPolicyConcurrency(false, true, false, 3) == 3,
+          "an unplanned greedy cycle did not price at its occupancy");
+  Require(qfn::MtpPolicyConcurrency(true, false, false, 1) == 1,
+          "an unseeded sampled cycle did not price at its occupancy");
+  Require(qfn::MtpPolicyConcurrency(true, true, false, 1) == 0,
+          "a seeded sampled cycle did not keep the configured row");
+  Require(qfn::MtpPolicyConcurrency(false, false, true, 2) == 0 &&
+              qfn::MtpPolicyConcurrency(true, false, true, 2) == 0,
+          "a planned batch did not keep its plan's row");
+}
+
 void CheckLengthController() {
   qfn::MtpLengthController controller(7);
   const auto initial = controller.Choose(7);
@@ -211,6 +226,7 @@ void CheckCalibratedCosts() {
           "calibrated controller state rejected");
   Require(single.Choose(7, 0) > concurrent.Choose(7, 0),
           "concurrent verification cost did not shorten the draft chain");
+  CheckPolicyConcurrency();
   single.Observe(0, 1);
   concurrent.Observe(0, 1);
   Require(single.Choose(7) > 0 && concurrent.Choose(7) == 0,
@@ -354,6 +370,7 @@ int main() {
     CheckVerificationBoundaries();
     CheckLengthController();
     CheckOccupancyOverride();
+    CheckPolicyConcurrency();
     CheckCalibratedCosts();
     CheckBatchProfitability();
     CheckCompactProposals();

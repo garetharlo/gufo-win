@@ -364,9 +364,11 @@ Executor::~Executor() {
     (void)hipEventDestroy(counts_ready_);
   }
   if (alt_stream_ != nullptr) {
+    qfn_mmq_release_stream(alt_stream_);
     (void)hipStreamDestroy(alt_stream_);
   }
   if (primary_stream_ != nullptr) {
+    qfn_mmq_release_stream(primary_stream_);
     (void)hipStreamDestroy(primary_stream_);
   }
 }
@@ -2489,6 +2491,10 @@ bool Executor::Run(Session& session, std::uint64_t key, bool graph,
       return false;
     }
     session.warmed_.insert(key);
+    // WaitFlag may run later passes (and their graph captures) on the other
+    // stream; grow its arena now, outside capture.
+    qfn_mmq_equalize_stream_pools(
+        0, stream_, stream_ == primary_stream_ ? alt_stream_ : primary_stream_);
   }
   return !synchronize ||
          Check(hipStreamSynchronize(stream_), "forward", error_msg);

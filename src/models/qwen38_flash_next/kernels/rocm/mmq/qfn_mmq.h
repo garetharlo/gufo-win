@@ -6,6 +6,13 @@
 extern "C" {
 int qfn_mmq_init(int device);
 
+// Frees the scratch arena of a stream about to be destroyed (waits for its queued work).
+void qfn_mmq_release_stream(hipStream_t stream);
+
+// Grows the second stream's scratch arena to the first's capacity, outside
+// capture (see qfn_ggml_stubs.hip.cpp).
+void qfn_mmq_equalize_stream_pools(int device, hipStream_t warm, hipStream_t other);
+
 void qfn_mmq_set_routed_max_expert_rows(int rows);
 
 void qfn_mmq_set_routed_tile_cols(int cols);

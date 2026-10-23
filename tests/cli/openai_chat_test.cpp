@@ -1445,7 +1445,7 @@ void TestImagePartsRetainOrderAndIdentity() {
     "stop":["END"],
     "messages":[{"role":"user","content":[
       {"type":"text","text":"left"},
-      {"type":"image_url","image_url":{"url":"data:image/png;base64,AQID","detail":"auto"}},
+      {"type":"image_url","image_url":{"url":"data:image/png;base64,AQID","detail":"high"}},
       {"type":"text","text":"right"},
       {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,BAUG"}}
     ]}]
@@ -1465,7 +1465,7 @@ void TestImagePartsRetainOrderAndIdentity() {
   for (
       const auto* body :
       {R"({"messages":[{"role":"assistant","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AQID"}}]}]})",
-       R"({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AQID","detail":"low"}}]}]})",
+       R"({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AQID","detail":"thumbnail"}}]}]})",
        R"({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"file:///tmp/image.png"}}]}]})"}) {
     Expect(gufo::server::HandleOpenAiChat(Request(body), backend).status == 400,
            "unsupported image role, policy and URL are rejected");

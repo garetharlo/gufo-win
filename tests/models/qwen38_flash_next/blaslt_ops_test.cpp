@@ -39,10 +39,13 @@ int main() {
     auto warmed = BlasLt::Create(nullptr, &error);
     Require(warmed != nullptr, error);
     constexpr int max_n = 4096;
-    for (const auto [m, k] :
-         {std::pair{96, 2560}, std::pair{513, 2560}, std::pair{33, 96}}) {
+    for (const auto [type, m, k] :
+         {std::tuple{HIP_R_16F, 96, 2560}, std::tuple{HIP_R_16F, 513, 2560},
+          std::tuple{HIP_R_16F, 33, 96}, std::tuple{HIP_R_16BF, 64, 2560},
+          std::tuple{HIP_R_16BF, 128, 2560}, std::tuple{HIP_R_16BF, 256, 2560},
+          std::tuple{HIP_R_16BF, 512, 2560}}) {
       // Prepare before the inputs exist, then reuse the plan in Gemm.
-      Require(warmed->Prepare(HIP_R_16F, m, max_n, k, &error), error);
+      Require(warmed->Prepare(type, m, max_n, k, &error), error);
       std::vector<__half> weights(static_cast<std::size_t>(m) * k);
       std::vector<__half> input(static_cast<std::size_t>(max_n) * k);
       unsigned rng = 123;
@@ -64,11 +67,15 @@ int main() {
                       hipMemcpyHostToDevice));
       if (k == 2560) {
         // Exercise both an unaligned cache boundary and a wide prefill split.
+        // A row's sums must not depend on its position in the batch: the
+        // indexer's BF16 scores feed a top-k whose near-ties would otherwise
+        // flip with the prefill chunking.
         for (const auto [total, boundary] :
-             {std::pair{136, 94}, std::pair{2048, 1025}}) {
+             {std::pair{136, 94}, std::pair{2048, 1025},
+              std::pair{3487, 777}}) {
           std::vector<float> bulk(std::size_t(m) * total), split(bulk.size());
           Require(warmed->Gemm(a.data, b.data, static_cast<float*>(c.data),
-                               HIP_R_16F, m, total, k, &error),
+                               type, m, total, k, &error),
                   error);
           Check(hipMemcpy(bulk.data(), c.data, bulk.size() * sizeof(float),
                           hipMemcpyDeviceToHost));
@@ -77,16 +84,25 @@ int main() {
             Require(
                 warmed->Gemm(
                     a.data, static_cast<__half*>(b.data) + std::size_t(off) * k,
-                    static_cast<float*>(c.data) + std::size_t(off) * m,
-                    HIP_R_16F, m, n, k, &error),
+                    static_cast<float*>(c.data) + std::size_t(off) * m, type, m,
+                    n, k, &error),
                 error);
           }
           Check(hipMemcpy(split.data(), c.data, split.size() * sizeof(float),
                           hipMemcpyDeviceToHost));
-          Require(bulk == split, "projection changed across prefill chunks");
+          Require(bulk == split,
+                  std::string(type == HIP_R_16BF ? "BF16" : "F16") +
+                      " m=" + std::to_string(m) +
+                      " projection changed across "
+                      "prefill chunks at " +
+                      std::to_string(boundary) + " of " +
+                      std::to_string(total));
         }
       }
       // Vary shape order and use ragged sizes between the calibrated widths.
+      // F16 only: the CPU reference below reads the weights as F16 halves.
+      if (type != HIP_R_16F)
+        continue;
       for (int n : {4096, 2048, 9, 1024, 512, 129, 128, 513, 256}) {
         auto fresh = BlasLt::Create(nullptr, &error);
         Require(fresh != nullptr, error);

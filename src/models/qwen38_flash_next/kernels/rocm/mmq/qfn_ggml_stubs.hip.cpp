@@ -15,6 +15,7 @@ namespace qfn_mmq {
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -106,8 +107,8 @@ int64_t ggml_time_us() {
 namespace {
 
 /* qwen38: every allocation the tier makes is scoped to one entry point and
- * released in reverse order, and every kernel runs on the executor's single
- * stream, so a stack over one device arena is enough. It replaces
+ * released in reverse order, and each arena serves one stream (qfn_pool_for_stream),
+ * so stream order makes a stack over one device arena enough. It replaces
  * hipMallocAsync/hipFreeAsync, whose reuse of a just-freed block raced with
  * in-flight kernels on this ROCm and made prefill logits nondeterministic. */
 struct qfn_stack_pool : public ggml_hip_pool {
@@ -165,6 +166,62 @@ struct qfn_stack_pool : public ggml_hip_pool {
 
 std::unique_ptr<ggml_hip_pool> ggml_backend_hip_context::new_pool_for_device(int device, int /*stream_no*/) {
     return std::unique_ptr<ggml_hip_pool>(new qfn_stack_pool(device));
+}
+
+// One scratch arena per (device, stream). The stack pool above relies on stream order to
+// reuse memory safely, so it must never be shared by two streams: the MTP drafter runs on its
+// own stream and reached these kernels too, and reused the target's scratch while the target's
+// kernels were still reading it.
+namespace {
+std::mutex g_stream_pools_mutex;
+std::map<std::pair<int, hipStream_t>, std::unique_ptr<ggml_hip_pool>> g_stream_pools;
+} // anonymous namespace
+
+// The fork alternates the executor's two streams between passes (WaitFlag),
+// so the eager warm-up pass that grows one stream's arena may run on a
+// different stream than the later decode-graph capture, and capture forbids
+// hipMalloc. Equalize the second arena to the first's capacity right after
+// the warm pass, outside any capture.
+extern "C" void qfn_mmq_equalize_stream_pools(int device, hipStream_t warm,
+                                              hipStream_t other) {
+    const std::lock_guard<std::mutex> lock(g_stream_pools_mutex);
+    auto &pw = g_stream_pools[{device, warm}];
+    if (!pw) pw = ggml_backend_hip_context::new_pool_for_device(device, 0);
+    auto &po = g_stream_pools[{device, other}];
+    if (!po) po = ggml_backend_hip_context::new_pool_for_device(device, 0);
+    const auto *sw = static_cast<qfn_stack_pool *>(pw.get());
+    auto *so = static_cast<qfn_stack_pool *>(po.get());
+    if (so->capacity < sw->capacity) {
+        ggml_hip_pool_alloc<char> grow(*so, sw->capacity);
+    }
+}
+
+ggml_hip_pool & qfn_pool_for_stream(int device, hipStream_t stream) {
+    const std::lock_guard<std::mutex> lock(g_stream_pools_mutex);
+    auto & pool = g_stream_pools[{device, stream}];
+    if (!pool) pool = ggml_backend_hip_context::new_pool_for_device(device, 0);
+    return *pool;
+}
+
+// The caller must have stopped every host submission and allocation on `stream` first: the
+// lock protects the map, not the pool references handed out by qfn_pool_for_stream.
+extern "C" void qfn_mmq_release_stream(hipStream_t stream) {
+    const std::lock_guard<std::mutex> lock(g_stream_pools_mutex);
+    for (auto it = g_stream_pools.begin(); it != g_stream_pools.end();) {
+        if (it->first.second != stream) {
+            ++it;
+            continue;
+        }
+        // The arena may still back queued work on this stream. If the wait fails, the work
+        // may still be running, so keep (leak) the arena rather than free memory in use.
+        const hipError_t status = hipStreamSynchronize(stream);
+        if (status != hipSuccess) {
+            fprintf(stderr, "qfn_mmq_release_stream: stream %p not synchronized (%s); keeping its scratch arena\n",
+                    (void *) stream, hipGetErrorString(status));
+            (void) it->second.release();
+        }
+        it = g_stream_pools.erase(it);
+    }
 }
 
 ggml_backend_hip_context::~ggml_backend_hip_context() {

@@ -3,14 +3,19 @@
 Status of upstream performance work that can be ported to this Windows engine.
 Read this first when resuming the task; update the checkboxes as items land.
 
+When the user says "review to see if there are new items we can port", it means:
+fetch <https://github.com/gufo-org/gufo> main, diff against the last sweep point
+below, and triage only fixes and performance work applicable to this fork.
+
 No plan-mode restrictions apply now. Measure every kernel change with the same
 TheRock ROCm 10.0.0 / clang 23 toolchain used for the Windows build.
 
 ## Sources
 
 - Upstream: <https://github.com/gufo-org/gufo>
-- Review clone: `%TEMP%\opencode\gufo-linux`
-  (HEAD `270b533`, v0.18.0 at review time)
+- Review clone: `%TEMP%\opencode\gufo-upstream` (bare clone works; fetch +
+  `git show <sha>`). Last swept upstream `5c8bb39` (v0.22.0) on 2026-10-23,
+  see "Sweep 2026-10-23"
 - Local base: upstream `fee9d2a` (PR #314 fix)
 - Local Windows HEAD at review: `c85aada`
 - Local fork already has Windows-specific work in
@@ -1090,6 +1095,103 @@ staging path (28.5 GB resident weights, no stall, valid PNG).
 
 ---
 
+## Sweep 2026-10-23 (upstream `53ebb51`..`5c8bb39`, v0.21.0 + v0.22.0)
+
+Next sweep starts from `5c8bb39`. Triage of everything new since the 0.20.0
+sweep; fixes first, then perf. All four portables below were ported on
+2026-10-23; the changes are in the working tree (uncommitted at documentation
+time). Verification status per item; the shared GPU gates are listed under
+"Sweep 2026-10-23 verification" below.
+
+### [x] #707 - per-HIP-stream qfn_mmq scratch arena (fix)
+
+Upstream `68ff41a`, ported 2026-10-23. The fork's executor alternates
+`primary_stream_`/`alt_stream_` (executor.cpp:1778) and mmq scratch was pinned
+to one arena, so alt-stream work serialized on the primary's arena. Port:
+`qfn_pool_for_stream(device, stream)` in `qfn_ggml_stubs.hip.cpp` (mutex +
+`std::map<std::pair<int,hipStream_t>, unique_ptr<ggml_hip_pool>>`), all six
+`ctx->pool()` sites in `qfn_mmq.hip.cpp` now call it, and the executor
+destructor calls `qfn_mmq_release_stream(alt/primary_stream_)` before each
+`hipStreamDestroy` (release syncs first; on failure the arena leaks with a
+stderr warning rather than risking a use-after-free). Declarations added to
+`common.hpp`, `qfn_mmq.h`, `<map>` include in `qfn_mmq_prelude.h`. Upstream's
+60-line multi-stream `projection_ops_test` was NOT ported (would need a new
+test binary; the executor-level behavior is exercised by the model suite).
+Remaining gate: greedy byte-identical + interleaved MTP bench on GPU.
+
+### [x] #714 - BF16 indexer projections summed in K order for every token (fix)
+
+Upstream `6c8b2ff`, ported 2026-10-23. Dropped the batch-position-dependent K
+rotation from `DenseF16GEMMKernel` (`bf16_class`/`k_rotation`/`rotate` gone;
+`token_of = t_block + local`; plain `kb` loads), `DenseBf16Gemm` grid is now
+`dim3((batch+127)/128, (m+63)/64)`. `blaslt.cpp` gained static
+`OwnBf16(type,m,k)` (HIP_R_16BF, k==2560, m in {512,256,128,64}) replacing the
+MT32x32x64 kernel-name detection; `Prepare` warms it; `UsesOwnKernel` is now
+static `(type, m, k)` = `OwnF16||OwnBf16`. `blaslt_ops_test.cpp` adapted to
+upstream's shape: type-tuple loop adds BF16 m=64/128/256/512 rows, a third
+`(total=3487, boundary=777)` chunk-split case, and a message naming type/m;
+the CPU numeric-reference loop stays F16-only (it reads halves). Gate
+`qwen38_flash_next.blaslt_ops` on GPU: PASS (PATH prefix
+`C:\TheRock\build\bin`), see verification note.
+
+### [x] #703 - price unseeded sampled MTP drafts at the decoding occupancy (perf)
+
+Upstream `1167a94`, ported 2026-10-23. New constexpr `MtpPolicyConcurrency(
+sampled, seeded, planned_batch, occupancy)` in `mtp_policy.hpp` returning
+`(sampled && seeded) || planned_batch ? 0 : occupancy`; engine.cpp now calls it
+with `sampler.config().seed >= 0` as `seeded` (fork has `seed{-1}` = random in
+`core/sampling.hpp`). Comment updates in `mtp_costs.hpp`. Test
+`CheckPolicyConcurrency` added to `mtp_sampling_test.cpp` (upstream's exact
+assertions). PASSED on GPU build: `qwen38_flash_next_mtp_sampling_test` green.
+Note: fork's `survival` branch still short-circuits ahead of `Choose` for
+sampled single-session, so the pricing change only reaches non-survival
+sampled cohorts; behavior difference vs upstream is limited to that path.
+
+### [x] #722 - accept `low`/`high` image detail as automatic (fix)
+
+Upstream `9fa3645`, ported 2026-10-23. `openai_chat.cpp` now accepts detail
+`auto`/`low`/`high`/`original` (all behave as auto); test updated to use
+`"high"` on the 200 path and `"thumbnail"` (still invalid) on the 400 path.
+PASSED: `openai_chat_test` green on cpu-test build.
+
+### [-] #702 - stop the benchmark server when startup is interrupted (fix)
+
+Upstream `53ebb51`. Not ported: fork's `cli bench` does not start a server the
+way upstream's benchmark harness does (fork uses `gufo bench` in-process), so
+there is nothing to stop. Revisit only if the fork grows a serving benchmark.
+
+### Sweep 2026-10-23 verification
+
+- `tools/ci/check-format.py` PASS (after --fix) on all 512 files.
+- cpu-test: `openai_chat_test` PASS.
+- gpu-test build: `qwen38_flash_next_mtp_sampling_test` PASS.
+- ~~Blocked: `qwen38_flash_next.blaslt_ops`~~ RESOLVED: the runtime DLLs live in
+  `C:\TheRock\build\bin` (`libhipblaslt.dll`, `rocblas.dll`); prefixing PATH
+  with it makes the test pass (0.93 s, gfx1151).
+- Not yet run (need GPU host): greedy byte-identical check for #707/#714,
+  `--validate-prefill` for #714, interleaved MTP bench, sampled bench at
+  concurrency >1 for #703.
+
+### Not applicable this sweep
+
+- `b0eb5d4` / `e4a219e` — qwen27b DFlash2; model not in the fork.
+- `8a79230` (#677) — checkpoint stack the fork does not have (same
+  disposition as #445/#615/#633).
+- `3aa068b` / `7c81965` / `79c2dcc` / `ddc31dc` — platform leaves
+  (os_info, net, shutdown_signal, publish/prefault); Linux-first scaffolding.
+  Revisit `ddc31dc` prefault if the Windows loading gap stays open.
+- `2947624` (#350 YaRN) — feature, outside the fixes/perf scope.
+- `7b1bf04` / `7110c79` — release chores.
+
+### Watch: `5c8bb39` (#734) map GGUF shards through `mapped_file`
+
+655 new lines (`core/platform/mapped_file.{hpp,cpp}` + gguf_reader rewrite).
+Directly targets the Windows loading gap (NTFS serializing unbuffered reads of
+the mapped shard, see "Windows loading path"), but it is a platform-layer port
+of its own — evaluate separately, not a drop-in.
+
+---
+
 ## Do not port
 
 - **#445 / #615 / #633 cache and checkpoint stack** — local Flash-Next has no
@@ -1100,6 +1202,41 @@ staging path (28.5 GB resident weights, no stall, valid PNG).
   portable cold-function bits are small.
 - **#248d902 managed-alloc fallback** — no demonstrated perf win; Windows HIP
   managed-memory behavior is uncertain.
+
+### Sweep 2026-10-23 verification (all gates PASS)
+
+- `tools/ci/check-format.py`: PASS (512 files).
+- cpu-test `openai_chat_test` PASS; gpu-test `qwen38_flash_next.mtp_sampling`
+  PASS; gpu-test `qwen38_flash_next.blaslt_ops` PASS (needs
+  `C:\TheRock\build\bin` on PATH for hipblaslt/rocblas DLLs).
+- #714 `--validate-prefill 64` (`bench -p 2048 -n 16 -d 0 -r 1`): rmse 0.28,
+  cosine 1.00, max_error 1.30; pp2048 1650.90, tg16 26.89.
+- Greedy MTP byte-identical vs pre-port base (`prompt --speculative mtp -t 0
+  -n 96`, tides prompt): output text identical; only the model-load header
+  differs (48.33 vs 58.87 s).
+- Interleaved A/B non-MTP (`bench -p 2048 -n 128 -d 0 -r 1` ×2 each):
+  pp2048 base 1619/1632 vs new 1645/1636; tg128 base 30.1/30.5 vs new
+  30.5/30.4 — neutral.
+- Interleaved A/B MTP (`bench --speculative mtp -p 2048 -n 128 -d 0,32768
+  -r 1`): tg128 d0 base 34.76 → new **38.95 (+12%)**; tg128 d32768 base
+  75.62 → new **79.27 (+4.8%)**; pp2048 neutral (1588.89/1388.53 vs
+  1598.69/1397.87). This is the #707 win.
+- #703 gate, sampled serving at concurrency 2, temp 1.0
+  (`gufo-serving-bench.py --prompt-repeat 32 --max-tokens 128 -c 2`): new
+  36.48 output tok/s vs base 34.53 (+5.6%), draft acceptance 63% on both
+  (291/460 vs 175/279) — the gain is the longer drafts at occupancy 2, not
+  sampling noise.
+
+**Fork-specific fix on top of #707:** the first port hit
+`hipErrorStreamCaptureUnsupported` during decode-graph capture (`bench -n
+128`): the eager warm-up pass grew only the stream it ran on, and `WaitFlag`
+later flips `stream_`, so capture could hit the other stream's cold arena and
+`reserve`'s `hipMalloc` is illegal inside capture. Fix:
+`qfn_mmq_equalize_stream_pools(device, warm, other)` in
+`qfn_ggml_stubs.hip.cpp` (grows the second arena to the first's capacity via
+a scoped `ggml_hip_pool_alloc`), called from the executor's warm-up branch
+after `session.warmed_.insert(key)`. Upstream has no graph capture, so this
+fix is fork-only.
 
 ---
 
