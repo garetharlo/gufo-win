@@ -80,6 +80,10 @@ void EmbedTokens(const void* table, WeightType type, const std::int32_t* tokens,
                  float* res, std::uint32_t n_tokens, std::uint32_t hidden,
                  std::uint32_t streams, hipStream_t stream);
 
+/// Least-squares-refit Q8_0 -> Q4_1 conversion for decode weight copies.
+void RequantQ8_0ToQ4_1(const void* src, void* dst, std::size_t blocks,
+                       hipStream_t stream);
+
 /// out[t][d] = rmsnorm(x[t][d]) * gamma[d]; `groups` independent norms of
 /// `dim/groups` elements each share the gamma row. gamma may be null.
 void RmsNormRows(const float* x, const float* gamma, float* out,

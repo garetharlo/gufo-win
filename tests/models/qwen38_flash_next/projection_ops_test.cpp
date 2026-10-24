@@ -748,6 +748,245 @@ void CheckDecodeGrouping(int rows, int cols) {
     CheckHip(hipFree(ptr), "decode test free");
 }
 
+void CheckDecodeQ4_1Copy(int rows, int cols, int tokens) {
+  const auto w = MakeWeights(rows, cols, 11);
+  const auto gate = MakeWeights(rows, cols, 17);
+  const std::size_t blocks = std::size_t(rows) * (cols / 32);
+  std::vector<float> x(tokens * cols);
+  std::uint32_t seed = 37;
+  for (auto& v : x)
+    v = Uniform(&seed, 2.0F);
+  void* dw = nullptr;
+  void* dgate = nullptr;
+  void* dcopy = nullptr;
+  void* dcgate = nullptr;
+  float* dx = nullptr;
+  void* dq = nullptr;
+  float* out = nullptr;
+  CheckHip(hipMalloc(&dw, w.blocks.size() + 4096), "Q4_1 weights");
+  CheckHip(hipMalloc(&dgate, gate.blocks.size() + 4096), "Q4_1 gate weights");
+  CheckHip(hipMalloc(&dcopy, blocks * 20 + 4096), "Q4_1 copy");
+  CheckHip(hipMalloc(&dcgate, blocks * 20 + 4096), "Q4_1 gate copy");
+  CheckHip(hipMalloc(&dx, x.size() * sizeof(float)), "Q4_1 inputs");
+  CheckHip(hipMalloc(&dq, qfn_mmq_q8_1_bytes(tokens, cols)),
+           "Q4_1 quantized inputs");
+  CheckHip(hipMalloc(&out, (rows * tokens + 4) * sizeof(float)), "Q4_1 output");
+  CheckHip(
+      hipMemcpy(dw, w.blocks.data(), w.blocks.size(), hipMemcpyHostToDevice),
+      "Q4_1 weights upload");
+  CheckHip(hipMemcpy(dgate, gate.blocks.data(), gate.blocks.size(),
+                     hipMemcpyHostToDevice),
+           "Q4_1 gate upload");
+  CheckHip(
+      hipMemcpy(dx, x.data(), x.size() * sizeof(float), hipMemcpyHostToDevice),
+      "Q4_1 input upload");
+  q::RequantQ8_0ToQ4_1(dw, dcopy, blocks, nullptr);
+  q::RequantQ8_0ToQ4_1(dgate, dcgate, blocks, nullptr);
+  CheckHip(hipGetLastError(), "Q4_1 requantization");
+  if (qfn_mmq_quantize_q8_1(dx, dq, tokens, cols, nullptr))
+    throw std::runtime_error("Q4_1 input quantization failed");
+  {
+    float* cwt = nullptr;
+    void* cin = nullptr;
+    float* cout_ = nullptr;
+    // Controlled clip: known Q8_0 weights and a hand-built Q8_1 input, so
+    // every factor of the kernel's dot is known by construction.
+    const int ck = 32;
+    std::vector<std::uint8_t> cw(34);  // d=fp16(0.5), qs=1..32
+    const __half cd = __float2half(0.5F);
+    std::memcpy(cw.data(), &cd, 2);
+    for (int i = 0; i < 32; ++i)
+      cw[2 + i] = static_cast<std::uint8_t>(i + 1);
+    std::vector<std::uint8_t> ci(36);  // ds.x=fp16(0.01), qs=127..? test
+    const __half cds = __float2half(0.01F);
+    std::memcpy(ci.data(), &cds, 2);
+    static const std::uint8_t czero[2] = {0, 0};
+    std::memcpy(ci.data() + 2, czero, 2);
+    for (int i = 0; i < 32; ++i)
+      ci[4 + i] = 127;
+    CheckHip(hipMalloc(&cwt, cw.size() + 4096), "ctrl weights");
+    CheckHip(hipMalloc(&cin, ci.size() + 4096), "ctrl input");
+    CheckHip(hipMalloc(&cout_, 8 * 4), "ctrl output");
+    CheckHip(hipMemcpy(cwt, cw.data(), cw.size(), hipMemcpyHostToDevice),
+             "ctrl weights upload");
+    CheckHip(hipMemcpy(cin, ci.data(), ci.size(), hipMemcpyHostToDevice),
+             "ctrl input upload");
+    // dot = 0.5 * 0.01 * sum(qs[i]*127)
+    double expect = 0.5 * 0.01 * 127.0 * 32.0 * 16.5;
+    if (qfn_mmq_q8_0_dense_vec_preq(cwt, nullptr, cin, cout_, 1, 1, ck,
+                                    nullptr))
+      throw std::runtime_error("controlled probe failed");
+    CheckHip(hipDeviceSynchronize(), "controlled probe sync");
+    float got = 0.0F;
+    CheckHip(hipMemcpy(&got, cout_, 4, hipMemcpyDeviceToHost), "ctrl copy");
+    if (std::abs(static_cast<double>(got) - expect) > 0.02 * expect)
+      throw std::runtime_error(
+          "Q8_0 controlled dot wrong: got=" + std::to_string(got) +
+          " expect=" + std::to_string(expect));
+    CheckHip(hipFree(cwt), "ctrl free w");
+    CheckHip(hipFree(cin), "ctrl free in");
+    CheckHip(hipFree(cout_), "ctrl free out");
+  }
+  for (const bool gated : {false, true}) {
+    void* gw = gated ? dcgate : nullptr;
+    for (int t = 0; t < tokens; ++t) {
+      const auto* qrow = static_cast<const std::uint8_t*>(dq) +
+                         t * qfn_mmq_q8_1_bytes(1, cols);
+      if (qfn_mmq_q4_1_dense_vec_preq(dcopy, gw, qrow, out + t * rows, rows, 1,
+                                      cols, nullptr))
+        throw std::runtime_error("scalar Q4_1 projection failed");
+    }
+    std::vector<float> scalar(tokens * rows), batch(tokens * rows + 4);
+    CheckHip(hipMemcpy(scalar.data(), out, scalar.size() * sizeof(float),
+                       hipMemcpyDeviceToHost),
+             "Q4_1 scalar output");
+    for (int n = 1; n <= tokens; ++n) {
+      CheckHip(hipMemset(out, 0xA5, batch.size() * sizeof(float)),
+               "Q4_1 output guard");
+      const auto* input = static_cast<const std::uint8_t*>(dq) +
+                          qfn_mmq_q8_1_bytes(tokens - n, cols);
+      if (qfn_mmq_q4_1_dense_vec_preq(dcopy, gw, input, out, rows, n, cols,
+                                      nullptr))
+        throw std::runtime_error("batched Q4_1 projection failed");
+      CheckHip(hipMemcpy(batch.data(), out, batch.size() * sizeof(float),
+                         hipMemcpyDeviceToHost),
+               "Q4_1 batch output");
+      // Q4_1 batched launches reassociate the strided dot tree, so the
+      // groupings match to float-rounding precision rather than bitwise.
+      for (int r = 0; r < n * rows; ++r) {
+        const double sa =
+            scalar[(tokens - n) * rows + r];  // NOLINT(*-c-operators)
+        if (std::abs(sa - batch[r]) > 2e-4 * std::abs(sa) + 1e-3) {
+          std::fprintf(stderr, "Q4_1 diff idx=%d scalar=%.9g batch=%.9g\n", r,
+                       sa, static_cast<double>(batch[r]));
+          throw std::runtime_error(
+              "Q4_1 dense grouping differs: M=" + std::to_string(rows) +
+              " K=" + std::to_string(cols) + " N=" + std::to_string(n) +
+              " gated=" + std::to_string(gated));
+        }
+      }
+      for (std::size_t i = std::size_t(n) * rows; i < batch.size(); ++i) {
+        if (std::bit_cast<std::uint32_t>(batch[i]) != 0xA5A5A5A5U)
+          throw std::runtime_error("Q4_1 batch projection overwrote its guard");
+      }
+    }
+    // Host truth: the exact Q4_1 dots, the exact Q8_0 dots, and the dot
+    // energy that bounds the 4-bit requantization noise between them.
+    const std::size_t rst = std::size_t(tokens) * rows;
+    std::vector<std::uint8_t> copy_host(blocks * 20);
+    std::vector<std::uint8_t> gcopy_host(blocks * 20);
+    CheckHip(hipMemcpy(copy_host.data(), dcopy, copy_host.size(),
+                       hipMemcpyDeviceToHost),
+             "Q4_1 copy download");
+    CheckHip(hipMemcpy(gcopy_host.data(), dcgate, gcopy_host.size(),
+                       hipMemcpyDeviceToHost),
+             "Q4_1 gate copy download");
+    auto half_at = [](const std::uint8_t* p) {
+      __half h;
+      std::memcpy(&h, p, sizeof(h));
+      return __half2float(h);
+    };
+    std::vector<double> q4u(rst), q4g(rst), q8u(rst), q8g(rst), eu(rst),
+        eg(rst);
+    for (int t = 0; t < tokens; ++t) {
+      for (int r = 0; r < rows; ++r) {
+        const std::size_t i = std::size_t(t) * rows + r;
+        double au = 0.0;
+        double ag = 0.0;
+        double bu = 0.0;
+        double bg = 0.0;
+        double cu = 0.0;
+        double cg = 0.0;
+        for (int b = 0; b < cols / 32; ++b) {
+          const std::size_t bi = (std::size_t(r) * (cols / 32) + b) * 20;
+          const float d4u = half_at(copy_host.data() + bi);
+          const float m4u = half_at(copy_host.data() + bi + 2);
+          const float d4g = half_at(gcopy_host.data() + bi);
+          const float m4g = half_at(gcopy_host.data() + bi + 2);
+          for (int j = 0; j < 32; ++j) {
+            const std::size_t ix =
+                std::size_t(r) * cols + std::size_t(b) * 32 + j;
+            const double xv =
+                x[std::size_t(t) * cols + std::size_t(b) * 32 + j];
+            const double w8u = w.values[ix];
+            const double w8g = gate.values[ix];
+            const float nibu =
+                static_cast<float>(j < 16 ? (copy_host[bi + 4 + j] & 0xF)
+                                          : (copy_host[bi + 4 + j - 16] >> 4));
+            const float nibg =
+                static_cast<float>(j < 16 ? (gcopy_host[bi + 4 + j] & 0xF)
+                                          : (gcopy_host[bi + 4 + j - 16] >> 4));
+            au += (d4u * nibu + m4u) * xv;
+            ag += (d4g * nibg + m4g) * xv;
+            bu += w8u * xv;
+            bg += w8g * xv;
+            cu += (w8u * xv) * (w8u * xv);
+            cg += (w8g * xv) * (w8g * xv);
+          }
+        }
+        q4u[i] = au;
+        q4g[i] = ag;
+        q8u[i] = bu;
+        q8g[i] = bg;
+        eu[i] = std::sqrt(cu);
+        eg[i] = std::sqrt(cg);
+      }
+    }
+    // The fitted requantizer keeps each dot within a fraction of the row's
+    // energy; an indexing or scale bug shifts dots by O(energy).
+    for (std::size_t i = 0; i < rst; ++i) {
+      if (std::abs(q4u[i] - q8u[i]) > 0.4 * eu[i] ||
+          std::abs(q4g[i] - q8g[i]) > 0.4 * eg[i]) {
+        std::fprintf(stderr,
+                     "Q4_1 requant noise idx=%zu up=%.3f/%.3f gate=%.3f/%.3f "
+                     "energy=%.3f/%.3f\n",
+                     i, q4u[i], q8u[i], q4g[i], q8g[i], eu[i], eg[i]);
+        throw std::runtime_error(
+            "Q4_1 requant noise out of energy envelope: M=" +
+            std::to_string(rows) + " K=" + std::to_string(cols));
+      }
+    }
+    for (int t = 0; t < tokens; ++t) {
+      for (int r = 0; r < rows; ++r) {
+        const std::size_t i = std::size_t(t) * rows + r;
+        // Device vs host-exact Q4_1: input quantization and float
+        // reassociation stay within ~2 percent of the plus a
+        // 2-sigma quantization-noise floor.
+        const double tol =
+            0.01 * std::sqrt(double(cols)) + 0.02 * std::abs(q4u[i]);
+        double expect = q4u[i];
+        double bound = tol;
+        if (gated) {
+          const double sl = q4g[i] / (1.0 + std::exp(-q4g[i]));
+          expect = q4u[i] * sl;
+          bound = std::abs(sl) * tol + std::abs(q4u[i]) * 1.105 *
+                                           (0.01 * std::sqrt(double(cols)) +
+                                            0.02 * std::abs(q4g[i]));
+        }
+        if (std::abs(static_cast<double>(scalar[i]) - expect) > bound) {
+          std::fprintf(stderr,
+                       "Q4_1 detail idx0..2: scalar=%.4f %.4f %.4f "
+                       "up=%.4f %.4f %.4f gate=%.4f %.4f %.4f\n",
+                       scalar[0], scalar[1], scalar[2],
+                       static_cast<double>(q4u[0]), static_cast<double>(q4u[1]),
+                       static_cast<double>(q4u[2]), static_cast<double>(q4g[0]),
+                       static_cast<double>(q4g[1]),
+                       static_cast<double>(q4g[2]));
+          throw std::runtime_error(
+              "Q4_1 copy misses its host-exact dot: M=" + std::to_string(rows) +
+              " K=" + std::to_string(cols) + " gated=" + std::to_string(gated) +
+              " idx=" + std::to_string(i) + " scalar=" +
+              std::to_string(scalar[i]) + " expect=" + std::to_string(expect) +
+              " bound=" + std::to_string(bound));
+        }
+      }
+    }
+  }
+  for (void* ptr : {dw, dgate, dcopy, dcgate, static_cast<void*>(dx), dq,
+                    static_cast<void*>(out)})
+    CheckHip(hipFree(ptr), "Q4_1 test free");
+}
+
 void CheckMtpOutputHead(float input_scale) {
   constexpr int rows = 65, cols = 2560, blocks = cols / 32;
   auto weights = MakeWeights(rows, cols, 73);
@@ -832,6 +1071,12 @@ void CheckMtpOutputHead(float input_scale) {
 int main() {
   try {
     CheckRoutedQ8Placement();
+    // Run first: the pre-existing CheckSmallProjection batch-width failure
+    // below would otherwise stop the suite before the new checks.
+    CheckDecodeQ4_1Copy(64, 2560, 8);
+    CheckDecodeQ4_1Copy(2561, 2560, 8);
+    CheckDecodeQ4_1Copy(12289, 2560, 8);
+    CheckDecodeQ4_1Copy(320, 10240, 8);
     CheckSmallProjection(q::WeightType::kF32, 513, 2560);
     CheckSmallProjection(q::WeightType::kF32, 96, 2560);
     CheckSmallProjection(q::WeightType::kBF16, 129, 2560);

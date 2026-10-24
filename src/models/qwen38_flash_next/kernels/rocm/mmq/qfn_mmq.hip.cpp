@@ -775,6 +775,24 @@ extern "C" int qfn_mmq_q8_0_dense_vec_preq(const void* W, const void* W_gate,
                           out_f32, K, M, N, input_stride, stream);
   return hipGetLastError() == hipSuccess ? 0 : -3;
 }
+
+extern "C" int qfn_mmq_q4_1_dense_vec_preq(const void* W, const void* W_gate,
+                                           const void* X_q8, float* out_f32,
+                                           int M, int N, int K,
+                                           hipStream_t stream) {
+  if (!W || !X_q8 || !out_f32 || M <= 0 || N <= 0 || N > MMVQ_MAX_BATCH_SIZE ||
+      K <= 0 || K % QK4_1 != 0) {
+    fprintf(stderr,
+            "qfn_mmq_q4_1_dense_vec_preq: bad arguments M=%d N=%d K=%d\n", M, N,
+            K);
+    return -1;
+  }
+  const int input_stride = GGML_PAD(K, MATRIX_ROW_PADDING) / QK8_1;
+  mul_mat_vec_q4_1_dispatch(W, W_gate, static_cast<const block_q8_1*>(X_q8),
+                            out_f32, K, M, N, input_stride, stream);
+  return hipGetLastError() == hipSuccess ? 0 : -3;
+}
+
 template void mul_mat_q_case<GGML_TYPE_Q8_0>(
     ggml_backend_hip_context&, const mmq_args&, hipStream_t);
 template void mul_mat_q_case<GGML_TYPE_Q4_K>(

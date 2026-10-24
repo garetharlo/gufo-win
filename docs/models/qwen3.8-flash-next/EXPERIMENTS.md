@@ -58,6 +58,7 @@
 | One-tile-ahead LDS fragment prefetch (dense and routed WMMA) | Rejected: exact output, but the explicit double buffer raised register use (dense 221 → 253 VGPRs; the 128-token pair reached 256 with spills) and every GEMM slowed 3–14%. |
 | hipBLASLt F16 dense projections | Rejected: the pinned library reaches 19–26 TFLOPS on the 2048-token dense shapes against 30–34 TFLOPS for the Q8→F16 WMMA kernels; `tools/qwen-flash/dense_blaslt_sweep.hip` reproduces the sweep. |
 | Side-stream inject/shared-expert overlap | Rejected: exact output and real kernel overlap in the trace, but the co-running kernels slowed each other and interleaved wall-clock runs were 0.5–0.9% slower. |
+| Q4_1 decode weight copies (`GUFO_DECODE_COPY`, default `balanced`) | Retained from the mikealanni fork: large Q8_0 dense projections get a least-squares-refit Q4_1 copy (1.58 GiB here) that serves the 1–8 row decode GEMV, so decode reads 20 instead of 34 bytes per 32 weights; prefill and wide batches keep the Q8_0 WMMA path and the Q8_0 weights stay resident. Interleaved A/B at d0: tg128 30.18/30.24 → 35.64/35.69 tok/s (+18%), pp2048 1636/1644 → 1650/1651, greedy text identical, load unchanged. Decode numerics change; `GUFO_DECODE_COPY=off` restores the exact Q8_0 path. |
 
 Separate d32K pp2048 profiling attributes 29.1% of kernel time to MoE, 34.9%
 to dense projections and 12.6% to attention/indexing. Final-tile catch-up

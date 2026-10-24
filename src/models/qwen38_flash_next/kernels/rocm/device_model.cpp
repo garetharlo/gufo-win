@@ -499,6 +499,97 @@ std::unique_ptr<DeviceModel> DeviceModel::Upload(
     (void)hipFree(c.source);
     m->bytes_ -= c.count * sizeof(float) + kTailMargin;
   }
+
+  // Q4_1 decode copies: requantize hot decode matrices so the decode GEMV
+  // reads 20 instead of 34 bytes per 32 elements. Opt-in "off"; default
+  // "balanced" copies the small dense stack + shared expert;
+  // GUFO_DECODE_COPY=q4 also covers hyper-connections and attention output. The
+  // Q8_0 weights stay resident and serve prefill and wide batches, so copies
+  // only add memory.
+  {
+    const std::string mode = getenv("GUFO_DECODE_COPY") != nullptr
+                                 ? getenv("GUFO_DECODE_COPY")
+                                 : "balanced";
+    if (mode == "off") {
+      fprintf(stderr, "decode Q4_1 copies: off\n");
+    } else {
+      std::string classes = getenv("GUFO_DECODE_COPY_CLASSES") != nullptr
+                                ? getenv("GUFO_DECODE_COPY_CLASSES")
+                                : "ssm_in,ssm_out,attn_qkv,shexp";
+      const bool q4_on = mode.empty() || mode == "balanced" || mode == "q4";
+      const auto wants = [&classes](const char* cls) {
+        return classes.find(cls) != std::string::npos;
+      };
+      constexpr std::size_t kMinElements = 2560 * 6144;
+      constexpr std::size_t kHcElements = 320 * 10240;
+      constexpr std::size_t kBlkBytes = 20;  // Q4_1
+      std::size_t copied = 0;
+      const auto add = [&](DeviceTensor& t, std::size_t min_elements) {
+        if (t.type != core::GgmlType::kQ8_0 || t.data == nullptr ||
+            t.cols % 32 != 0) {
+          return;
+        }
+        const std::size_t rows = std::size_t{t.rows} * t.experts;
+        const std::size_t blocks = rows * t.cols / 32;
+        if (rows * t.cols < min_elements || blocks == 0 ||
+            rows * t.cols % 32 != 0) {
+          return;
+        }
+        void* copy = nullptr;
+        if (hipMalloc(&copy, blocks * kBlkBytes + kTailMargin) != hipSuccess) {
+          return;
+        }
+        m->allocations_.push_back(copy);
+        m->bytes_ += blocks * kBlkBytes + kTailMargin;
+        rocm::RequantQ8_0ToQ4_1(t.data, copy, blocks, nullptr);
+        if (hipGetLastError() != hipSuccess) {
+          (void)hipFree(copy);
+          return;
+        }
+        t.decode_data = copy;
+        t.decode_type = core::GgmlType::kQ4_1;
+        copied += blocks * kBlkBytes;
+      };
+      const auto wants_layer = [&](DeviceLayer& l) {
+        if (wants("ssm_in")) {
+          add(l.ssm_in, kMinElements);
+        }
+        if (wants("ssm_out")) {
+          add(l.ssm_out, kMinElements);
+        }
+        if (wants("attn_qkv")) {
+          add(l.attn_qkv, kMinElements);
+        }
+        if (wants("attn_out")) {
+          add(l.attn_out, kMinElements);
+        }
+        if (wants("hc")) {
+          for (DeviceMixer* mx : {&l.hc_attn, &l.hc_ffn}) {
+            add(mx->down, kHcElements);
+            add(mx->up, kHcElements);
+          }
+        }
+        if (wants("shexp")) {
+          add(l.shexp_up, 1);
+          add(l.shexp_gate, 1);
+          add(l.shexp_down, 1);
+        }
+      };
+      for (auto& l : m->layers_) {
+        wants_layer(l);
+      }
+      const auto status = hipDeviceSynchronize();
+      if (status != hipSuccess) {
+        if (error_msg != nullptr) {
+          *error_msg = "decode weight conversion failed: " +
+                       std::string(hipGetErrorString(status));
+        }
+        return nullptr;
+      }
+      fprintf(stderr, "decode Q4_1 copies: %.2f GiB\n",
+              double(copied) / (1024.0 * 1024.0 * 1024.0));
+    }
+  }
   return m;
 }
 

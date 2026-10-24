@@ -718,9 +718,10 @@ bool Executor::GatedDenseBatch(const DeviceTensor& up, const DeviceTensor& gate,
                                const float* x, float* out, std::uint32_t rows,
                                std::string* error) const {
   const Scratch base = s_;
-  const bool q8 = up.type == core::GgmlType::kQ8_0 &&
-                  gate.type == core::GgmlType::kQ8_0 && up.rows == gate.rows &&
-                  up.cols == gate.cols;
+  // Q4_1 decode copies take the per-chunk GatedDense route instead.
+  const bool q8 =
+      up.type == core::GgmlType::kQ8_0 && gate.type == core::GgmlType::kQ8_0 &&
+      up.decode_data == nullptr && up.rows == gate.rows && up.cols == gate.cols;
   if (q8 && !QuantizeBatch(x, rows, up.cols, error))
     return false;
   for (std::uint32_t r = 0; r < rows; r += kDecodeRows) {

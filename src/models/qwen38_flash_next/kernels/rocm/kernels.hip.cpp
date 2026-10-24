@@ -5196,7 +5196,101 @@ __global__ void RoutedScatterKernel(const std::int32_t* __restrict__ ids,
   rows_slot[c] = static_cast<std::int32_t>(slot);
 }
 
+// Q4_1 decode-copy target: 20-byte block (ggml-common.h block_q4_1 layout).
+struct Q4_1Block {
+  __half d;
+  __half m;
+  std::uint8_t qs[16];
+};
+static_assert(sizeof(Q4_1Block) == 20, "block_q4_1 must be 20 bytes");
+
+// Refits each Q8_0 block as a least-squares-fitted Q4_1 block (better than a
+// plain rescale; the fork measured ~Q5_1-class error at Q4_1 size).
+__global__ void RequantQ8ToQ4_1Kernel(const Q8_0Block* __restrict__ src,
+                                      Q4_1Block* __restrict__ dst,
+                                      std::size_t blocks) {
+  constexpr int kCandidates = 24;
+  const std::size_t b = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
+  if (b >= blocks) {
+    return;
+  }
+  const Q8_0Block in = src[b];
+  const float scale = __half2float(in.d);
+  float x[32];
+  float lo = INFINITY;
+  float hi = -INFINITY;
+#pragma unroll
+  for (int j = 0; j < 32; ++j) {
+    x[j] = scale * static_cast<float>(in.qs[j]);
+    lo = fminf(lo, x[j]);
+    hi = fmaxf(hi, x[j]);
+  }
+  float best_d = (hi - lo) / 15.0F;
+  float best_m = lo;
+  if (hi > lo) {
+    float best_err = INFINITY;
+    for (int c = 0; c < kCandidates; ++c) {
+      const float iscale =
+          (15.0F + 0.1F * static_cast<float>(c - 8)) / (hi - lo);
+      float sl = 0.0F, sl2 = 0.0F, sx = 0.0F, slx = 0.0F;
+#pragma unroll
+      for (int j = 0; j < 32; ++j) {
+        const float l =
+            fminf(15.0F, fmaxf(0.0F, floorf((x[j] - lo) * iscale + 0.5F)));
+        sl += l;
+        sl2 += l * l;
+        sx += x[j];
+        slx += l * x[j];
+      }
+      const float det = 32.0F * sl2 - sl * sl;
+      if (det <= 0.0F) {
+        continue;
+      }
+      float d = (32.0F * slx - sl * sx) / det;
+      float m = (sx - d * sl) / 32.0F;
+      d = __half2float(__float2half(d));
+      m = __half2float(__float2half(m));
+      float err = 0.0F;
+#pragma unroll
+      for (int j = 0; j < 32; ++j) {
+        const float l =
+            fminf(15.0F, fmaxf(0.0F, floorf((x[j] - lo) * iscale + 0.5F)));
+        const float r = x[j] - (d * l + m);
+        err += r * r;
+      }
+      if (err < best_err) {
+        best_err = err;
+        best_d = d;
+        best_m = m;
+      }
+    }
+  }
+  const float inv = best_d != 0.0F ? 1.0F / best_d : 0.0F;
+  Q4_1Block out;
+  out.d = __float2half(best_d);
+  out.m = __float2half(best_m);
+#pragma unroll
+  for (int j = 0; j < 16; ++j) {
+    const auto q0 = static_cast<std::uint32_t>(
+        fminf(15.0F, fmaxf(0.0F, floorf((x[j] - best_m) * inv + 0.5F))));
+    const auto q1 = static_cast<std::uint32_t>(
+        fminf(15.0F, fmaxf(0.0F, floorf((x[j + 16] - best_m) * inv + 0.5F))));
+    out.qs[j] = static_cast<std::uint8_t>((q0 & 0x0FU) | ((q1 & 0x0FU) << 4U));
+  }
+  dst[b] = out;
+}
+
 }  // namespace
+
+void RequantQ8_0ToQ4_1(const void* src, void* dst, std::size_t blocks,
+                       hipStream_t stream) {
+  if (blocks == 0) {
+    return;
+  }
+  hipLaunchKernelGGL(
+      RequantQ8ToQ4_1Kernel, dim3(Blocks(blocks)), dim3(kThreads), 0, stream,
+      static_cast<const Q8_0Block*>(src), static_cast<Q4_1Block*>(dst), blocks);
+}
 
 void EmbedTokens(const void* table, WeightType type, const std::int32_t* tokens,
                  float* res, std::uint32_t n_tokens, std::uint32_t hidden,

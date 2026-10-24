@@ -21,6 +21,11 @@ struct DeviceTensor {
   std::uint32_t rows{0};
   std::uint32_t experts{1};
 
+  /// Optional requantized decode-only copy (GUFO_DECODE_COPY); null unless
+  /// created at upload. Type of decode_data: kQ4_1 (fitted requant).
+  void* decode_data{nullptr};
+  core::GgmlType decode_type{core::GgmlType::kQ4_1};
+
   [[nodiscard]] bool empty() const noexcept { return data == nullptr; }
   [[nodiscard]] const float* f32() const noexcept {
     return static_cast<const float*>(data);

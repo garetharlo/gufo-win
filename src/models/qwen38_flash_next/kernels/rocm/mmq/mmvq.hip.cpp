@@ -8,7 +8,7 @@ namespace qfn_mmq {
 // `scatter` reduces the inputs' sums together and stores them from one lane
 // each (same bits as reducing each sum on every lane and storing from lane 0).
 template<int ncols_dst, bool has_gate, int token_waves = 1, bool ragged = false,
-         bool scatter = false>
+         bool scatter = false, bool q4_1 = false>
 __launch_bounds__(32 * token_waves, 1) static __global__
     void mul_mat_vec_q8(const void* __restrict__ weights,
                         const void* __restrict__ gate,
@@ -16,8 +16,8 @@ __launch_bounds__(32 * token_waves, 1) static __global__
                         float* __restrict__ output, const uint32_t ncols_x,
                         const uint32_t nrows_x, const uint32_t stride_col_y,
                         const uint32_t valid_tokens = ncols_dst) {
-  constexpr int qi = QI8_0;
-  constexpr int vdr = VDR_Q8_0_Q8_1_MMVQ;
+  constexpr int qi = q4_1 ? QI4_1 : QI8_0;
+  constexpr int vdr = q4_1 ? VDR_Q4_1_Q8_1_MMVQ : VDR_Q8_0_Q8_1_MMVQ;
   constexpr int blocks_per_iter = vdr * 32 / qi;
   const int lane = token_waves > 1 ? threadIdx.x % 32 : threadIdx.x;
   const int first_token = token_waves > 1 ? threadIdx.x / 32 * ncols_dst : 0;
@@ -35,12 +35,19 @@ __launch_bounds__(32 * token_waves, 1) static __global__
       // columns reuse a valid row; their results are never stored.
       const int token =
           ragged ? min(first_token + j, int(valid_tokens) - 1) : first_token + j;
-      sum[j] += vec_dot_q8_0_q8_1(
-          weights, input + token * stride_col_y + kbx,
-          row_offset + kbx, kqs);
+      sum[j] += q4_1 ? vec_dot_q4_1_q8_1(
+                           weights, input + token * stride_col_y + kbx,
+                           row_offset + kbx, kqs)
+                     : vec_dot_q8_0_q8_1(
+                           weights, input + token * stride_col_y + kbx,
+                           row_offset + kbx, kqs);
       if constexpr (has_gate) {
-        gate_sum[j] += vec_dot_q8_0_q8_1(gate, input + j * stride_col_y + kbx,
-                                         row_offset + kbx, kqs);
+        gate_sum[j] += q4_1 ? vec_dot_q4_1_q8_1(
+                                  gate, input + j * stride_col_y + kbx,
+                                  row_offset + kbx, kqs)
+                            : vec_dot_q8_0_q8_1(
+                                  gate, input + j * stride_col_y + kbx,
+                                  row_offset + kbx, kqs);
       }
     }
   }
@@ -741,6 +748,67 @@ void mul_mat_vec_q8_dispatch(const void* weights, const void* gate,
       break;
     case 8:
       launch_q8<8>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    default:
+      GGML_ABORT("invalid vector batch width");
+  }
+}
+
+template <int tokens>
+static void launch_q4_1(const void* weights, const void* gate,
+                        const block_q8_1* input, float* output, int k, int rows,
+                        int input_stride, hipStream_t stream) {
+  if (gate && tokens > 1) {
+    mul_mat_vec_q8<tokens, true, 1, false, true, true><<<rows, 32, 0, stream>>>(
+        weights, gate, input, output, k, rows, input_stride);
+  } else if (gate) {
+    mul_mat_vec_q8<tokens, true, 1, false, false, true>
+        <<<rows, 32, 0, stream>>>(weights, gate, input, output, k, rows,
+                                  input_stride);
+  } else if (tokens > 1) {
+    mul_mat_vec_q8<tokens, false, 1, false, true, true>
+        <<<rows, 32, 0, stream>>>(weights, nullptr, input, output, k, rows,
+                                  input_stride);
+  } else {
+    mul_mat_vec_q8<tokens, false, 1, false, false, true>
+        <<<rows, 32, 0, stream>>>(weights, nullptr, input, output, k, rows,
+                                  input_stride);
+  }
+}
+
+// Decode copies of the large dense weights (GUFO_DECODE_COPY) re-launch the
+// Q8_0 GEMV template with the Q4_1 dot products. Vector batches stay at eight
+// tokens: the wide-matrix WMMA tile is Q8_0-only, the copies serve wide rows
+// through kDecodeRows chunks.
+void mul_mat_vec_q4_1_dispatch(const void* weights, const void* gate,
+                               const block_q8_1* input, float* output, int k,
+                               int rows, int tokens, int input_stride,
+                               hipStream_t stream) {
+  GGML_ASSERT(k % QK4_1 == 0 && rows > 0 && tokens >= 1 && tokens <= 8);
+  switch (tokens) {
+    case 1:
+      launch_q4_1<1>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    case 2:
+      launch_q4_1<2>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    case 3:
+      launch_q4_1<3>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    case 4:
+      launch_q4_1<4>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    case 5:
+      launch_q4_1<5>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    case 6:
+      launch_q4_1<6>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    case 7:
+      launch_q4_1<7>(weights, gate, input, output, k, rows, input_stride, stream);
+      break;
+    case 8:
+      launch_q4_1<8>(weights, gate, input, output, k, rows, input_stride, stream);
       break;
     default:
       GGML_ABORT("invalid vector batch width");
