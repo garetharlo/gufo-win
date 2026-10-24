@@ -5,7 +5,7 @@ shared-Q8_0 MTP sidecar; Gufo uses adaptive MTP. HTTP (direct `gufo bench` for
 the long-context sweep), greedy, thinking off.
 Gufo single-user MTP, concurrency, loading and llama.cpp MTP at 64K/128K:
 September 23, 2026; other results: September 22; direct 8K-256K sweep:
-October 23, 2026; bubo comparison: October 21, 2026.
+October 24, 2026; bubo comparison: October 21, 2026.
 llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
@@ -66,10 +66,10 @@ generated tokens. Other rows use the exact context.
 <!-- bench:context-sweep -->
 | Flash-Next Q4<br>Context (tokens) | Prefill pp (tok/s) | Decode AR (tok/s) | Decode MTP (tok/s) | MTP accepted |
 | ---: | ---: | ---: | ---: | ---: |
-| 8,192 | 1631.19 ± 10.97 | 28.27 ± 0.37 | 45.36 ± 1.45 | 64% (78/122) |
-| 32,768 | 1571.90 ± 2.11 | 27.19 ± 0.14 | 78.42 ± 2.72 | 100% (111/111) |
-| 131,072 | 1506.40 ± 0.25 | 25.41 ± 0.10 | 75.16 ± 2.21 | 100% (111/111) |
-| 262,144 | 1446.26 ± 2.00 | 24.09 ± 0.23 | 71.95 ± 2.11 | 100% (111/111) |
+| 8,192 | 1626.37 ± 1.83 | 28.51 ± 0.38 | 45.66 ± 1.45 | 64% (78/122) |
+| 32,768 | 1578.44 ± 0.82 | 27.49 ± 0.23 | 78.81 ± 2.43 | 100% (111/111) |
+| 131,072 | 1512.60 ± 0.69 | 25.23 ± 0.21 | 75.03 ± 2.27 | 100% (111/111) |
+| 262,144 | 1449.18 ± 0.86 | 24.21 ± 0.15 | 72.10 ± 2.01 | 100% (111/111) |
 <!-- /bench -->
 
 The bench prompt repeats a 20-token pattern. From 32K the model continues that
@@ -128,14 +128,14 @@ one untimed pass. The 256K row uses the same 262,143 prompt and 262,015 depth.
 <!-- bench:bubo-context-sweep -->
 | Flash-Next Q4<br>Context (tokens) | Bubo pp | Gufo pp | Bubo AR | Gufo AR | Bubo MTP | Gufo MTP |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 8,192 | 1540.60 ± 6.52 | 1631.19 ± 10.97 | 27.81 ± 0.08 | 28.27 ± 0.37 | 33.96 ± 0.21 | 45.36 ± 1.45 |
-| 32,768 | 1479.29 ± 3.27 | 1571.90 ± 2.11 | 27.52 ± 0.10 | 27.19 ± 0.14 | 67.36 ± 0.96 | 78.42 ± 2.72 |
-| 131,072 | 1381.13 ± 1.22 | 1506.40 ± 0.25 | 26.59 ± 0.04 | 25.41 ± 0.10 | 64.33 ± 0.65 | 75.16 ± 2.21 |
-| 262,144 | 1293.86 ± 1.87 | 1446.26 ± 2.00 | 25.74 ± 0.04 | 24.09 ± 0.23 | 61.84 ± 0.75 | 71.95 ± 2.11 |
+| 8,192 | 1540.60 ± 6.52 | 1626.37 ± 1.83 | 27.81 ± 0.08 | 28.51 ± 0.38 | 33.96 ± 0.21 | 45.66 ± 1.45 |
+| 32,768 | 1479.29 ± 3.27 | 1578.44 ± 0.82 | 27.52 ± 0.10 | 27.49 ± 0.23 | 67.36 ± 0.96 | 78.81 ± 2.43 |
+| 131,072 | 1381.13 ± 1.22 | 1512.60 ± 0.69 | 26.59 ± 0.04 | 25.23 ± 0.21 | 64.33 ± 0.65 | 75.03 ± 2.27 |
+| 262,144 | 1293.86 ± 1.87 | 1449.18 ± 0.86 | 25.74 ± 0.04 | 24.21 ± 0.15 | 61.84 ± 0.75 | 72.10 ± 2.01 |
 <!-- /bench -->
 
-All values are tok/s. Bubo prefill is 5.6-10.5% lower, AR decode is 1.6%
-lower to 6.8% higher, and MTP decode is 14.1-25.1% lower than Gufo across the
+All values are tok/s. Bubo prefill is 5.3-10.7% lower, AR decode is 2.5%
+lower to 6.3% higher, and MTP decode is 14.2-25.6% lower than Gufo across the
 sweep. The
 256K MTP run accepted 111/111 drafts (100%), so the repeated-text caveat above
 applies to both engines. Bubo's serving launcher also enables survival, Latin

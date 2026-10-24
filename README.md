@@ -20,10 +20,10 @@ Long-context sweep, 8K to 256K (October 2026, v0.2.0):
 
 | Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
 | --- | ---: | ---: | ---: | ---: |
-| 8,192 | 1,631.19 | 28.27 | 45.36 | 64% |
-| 32,768 | 1,571.90 | 27.19 | 78.42 | 100% |
-| 131,072 | 1,506.40 | 25.41 | 75.16 | 100% |
-| 262,144 | 1,446.26 | 24.09 | 71.95 | 100% |
+| 8,192 | 1,626.37 | 28.51 | 45.66 | 64% |
+| 32,768 | 1,578.44 | 27.49 | 78.81 | 100% |
+| 131,072 | 1,512.60 | 25.23 | 75.03 | 100% |
+| 262,144 | 1,449.18 | 24.21 | 72.10 | 100% |
 
 The 256K context holds the ~89 GiB model and state fully inside the 96 GB
 carve, so it decodes at full speed. The MTP column is an upper bound: the
