@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 import platform
-import resource
 import signal
 import statistics
 import subprocess
@@ -25,6 +24,11 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
+
+try:
+    import resource
+except ImportError:  # Windows lacks the POSIX resource module.
+    resource = None
 
 
 PRESETS = ("exact", "fast", "aggressive")
@@ -277,6 +281,12 @@ def public_descriptor(
 
 
 def child_rusage() -> dict[str, float | int]:
+    if resource is None:  # shortcut: Windows has no rusage, report zeros.
+        return {key: 0 for key in (
+            "user_seconds", "system_seconds", "maximum_rss_kib",
+            "minor_page_faults", "major_page_faults", "block_inputs",
+            "block_outputs", "voluntary_context_switches",
+            "involuntary_context_switches")}
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     return {
         "user_seconds": usage.ru_utime,
@@ -310,6 +320,15 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def stop_process_group(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
+        return
+    if not hasattr(os, "killpg"):  # shortcut: Windows lacks process groups.
+        process.terminate()
+        try:
+            process.wait(timeout=30)
+            return
+        except subprocess.TimeoutExpired:
+            process.kill()
+        process.wait()
         return
     os.killpg(process.pid, signal.SIGINT)
     try:
@@ -365,12 +384,15 @@ def run_one(
     ]
     usage_before = child_rusage()
     started = time.monotonic()
+    popen_kwargs: dict[str, Any] = {}
+    if hasattr(os, "killpg"):  # start_new_session is POSIX process groups.
+        popen_kwargs["start_new_session"] = True
     with progress_path.open("wb") as progress:
         process = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=progress,
-            start_new_session=True,
+            **popen_kwargs,
         )
         monitor = ProcessMonitor(process.pid, args.sample_interval)
         monitor_thread = threading.Thread(target=monitor.run, daemon=True)
