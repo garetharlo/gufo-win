@@ -87,18 +87,20 @@ void CheckReset() {
 
 // Sampled requests may use the small head at any session count, in or out of
 // a batch, so a seeded request drafts the same way whatever overlaps it.
-// Greedy eligibility is unchanged: plain greedy needs one session or a
-// jointly planned batch, and greedy penalties/constraints never qualify.
+// Greedy requests — penalties and constraints included — qualify whenever
+// they cannot collide with another request's table: one session, sole
+// occupant, or a jointly planned batch.
 void CheckEligibility() {
   for (const std::uint32_t sessions : {1U, 2U, 8U}) {
-    for (const bool planned : {false, true}) {
-      Require(qfn::MtpDraftSubsetAllowed(true, false, sessions, planned),
-              "a sampled request lost the small head");
-      Require(!qfn::MtpDraftSubsetAllowed(false, false, sessions, planned),
-              "greedy penalties or constraints reached the small head");
-      Require(qfn::MtpDraftSubsetAllowed(false, true, sessions, planned) ==
-                  (sessions == 1 || planned),
-              "plain greedy eligibility changed");
+    for (const std::uint32_t occupancy : {1U, 2U, 4U}) {
+      for (const bool planned : {false, true}) {
+        Require(qfn::MtpDraftSubsetAllowed(true, sessions, occupancy, planned),
+                "a sampled request lost the small head");
+        Require(qfn::MtpDraftSubsetAllowed(false, sessions, occupancy,
+                                           planned) ==
+                    (sessions == 1 || occupancy == 1 || planned),
+                "greedy eligibility changed");
+      }
     }
   }
 }

@@ -1005,13 +1005,12 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   const auto concurrency = model_->DecodeConcurrency();
   // Head eligibility is MtpDraftSubsetAllowed. Sampled cohorts are never
   // jointly planned (DecodeBatchImpl), so a sampled request decides the same
-  // way alone and in any batch. Every request keeps the established length
-  // controller and AR backoff.
-  const bool unmodified = !sampler.config().uses_random_sampling() &&
-                          !sampler.config().penalties_enabled();
-  const bool allow_subset =
-      MtpDraftSubsetAllowed(sampler.config().uses_random_sampling(), unmodified,
-                            concurrency, batch_drafts.has_value());
+  // way alone and in any batch. Greedy requests draft small whenever they
+  // cannot collide with another request's table. Every request keeps the
+  // established length controller and AR backoff.
+  const bool allow_subset = MtpDraftSubsetAllowed(
+      sampler.config().uses_random_sampling(), concurrency, occupancy,
+      batch_drafts.has_value());
   // Unplanned greedy and unseeded sampled cycles are priced at the requests
   // decoding now; seeded sampled ones keep the configured concurrency so they
   // replay the same widths, and a planned batch keeps the row its plan used.

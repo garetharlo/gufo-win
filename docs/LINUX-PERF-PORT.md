@@ -224,6 +224,13 @@ Windows fit: pure host code. Good fit.
 Acceptance: greedy output byte-identical; copy-heavy requests faster; prose not
 slower; sampled extraction not regressed.
 
+Upstream: `cc5f405` + `41d9346`. Drops the plain-greedy gate:
+`MtpDraftSubsetAllowed` becomes `sampled || sessions == 1 || occupancy == 1
+|| planned_batch`. Greedy requests with penalties/constraints, and greedy
+requests decoding alone in a multi-session server, now draft through the
+small head instead of the full projection. Signature swaps the `plain_greedy`
+bool for an `occupancy` count.
+
 ### [x] #603 — score MTP drafts over the request vocabulary
 
 Upstream: `51a8b00`. Upstream Linux measurements: **+13% coding-agent replay**,
