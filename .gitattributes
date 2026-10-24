@@ -1,0 +1,4 @@
+# Hash-pinned artifacts must keep exact bytes; disable CRLF conversion.
+src/models/deepseek_v4_flash/reference/*.jinja -text
+tests/models/deepseek_v4_flash/fixtures/*.json -text
+

@@ -258,7 +258,7 @@ nix develop -c cmake --build --preset gpu-test --target gufo-kernel-bench tune_h
 ./build/gpu-test/gufo-kernel-bench --help
 
 ./build/gpu-test/gufo-kernel-bench \
-  --case decode-attention \
+  --kernel decode-attention \
   --context 4096,8192,12288,16384 \
   --warmup 5 \
   --repetitions 30 \
@@ -377,7 +377,7 @@ nix develop -c rocprofv3 \
   --summary \
   --output-directory /tmp/gufo-profile \
   -- ./build/gpu-test/gufo-kernel-bench \
-    --case decode-attention \
+    --kernel decode-attention \
     --context 16384 \
     --warmup 1 \
     --repetitions 3

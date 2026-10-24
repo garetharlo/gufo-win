@@ -318,13 +318,13 @@
       <span>UD-Q4_K_XL · MTP shared Q8_0</span>
       <span>Greedy · thinking off</span>
       <span>2 timed reps after warm-up</span>
-      <span>20 October 2026</span>
+      <span>23 October 2026</span>
     </div>
   </header>
 
   <section class="stats" aria-label="Highlights">
-    <div class="stat"><b>1,601</b><small>tok/s prefill at 8K</small></div>
-    <div class="stat"><b>75.4</b><small>tok/s MTP decode at 32K</small></div>
+    <div class="stat"><b>1,631</b><small>tok/s prefill at 8K</small></div>
+    <div class="stat"><b>78.4</b><small>tok/s MTP decode at 32K</small></div>
     <div class="stat"><b>262,144</b><small>native context tokens</small></div>
     <div class="stat"><b>3.0×</b><small>MTP vs autoregressive at 256K</small></div>
   </section>
@@ -338,22 +338,22 @@
       <div class="bar-row">
         <span class="bar-label">8K</span>
         <div class="track"><div class="fill" style="--w:100%; --c:var(--prefill)"></div></div>
-        <span class="value">1600.90 <em>± 13.44</em></span>
+        <span class="value">1631.19 <em>± 10.97</em></span>
       </div>
       <div class="bar-row">
         <span class="bar-label">32K</span>
         <div class="track"><div class="fill" style="--w:96.4%; --c:var(--prefill)"></div></div>
-        <span class="value">1542.13 <em>± 2.74</em></span>
+        <span class="value">1571.90 <em>± 2.11</em></span>
       </div>
       <div class="bar-row">
         <span class="bar-label">128K</span>
-        <div class="track"><div class="fill" style="--w:92.0%; --c:var(--prefill)"></div></div>
-        <span class="value">1473.04 <em>± 1.73</em></span>
+        <div class="track"><div class="fill" style="--w:92.4%; --c:var(--prefill)"></div></div>
+        <span class="value">1506.40 <em>± 0.25</em></span>
       </div>
       <div class="bar-row">
         <span class="bar-label">256K</span>
-        <div class="track"><div class="fill" style="--w:87.8%; --c:var(--prefill)"></div></div>
-        <span class="value">1405.18 <em>± 0.57</em></span>
+        <div class="track"><div class="fill" style="--w:88.7%; --c:var(--prefill)"></div></div>
+        <span class="value">1446.26 <em>± 2.00</em></span>
       </div>
     </div>
   </section>
@@ -370,34 +370,34 @@
       <div class="bar-row">
         <span class="bar-label">8K</span>
         <div class="pair">
-          <div class="track"><div class="fill" style="--w:33.4%; --c:var(--ar)"></div></div>
-          <div class="track"><div class="fill" style="--w:52.8%; --c:var(--mtp)"></div></div>
+          <div class="track"><div class="fill" style="--w:36.1%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:57.8%; --c:var(--mtp)"></div></div>
         </div>
-        <span class="value">26.70 / 42.25 <em>tok/s</em></span>
+        <span class="value">28.27 / 45.36 <em>tok/s</em></span>
       </div>
       <div class="bar-row">
         <span class="bar-label">32K</span>
         <div class="pair">
-          <div class="track"><div class="fill" style="--w:34.0%; --c:var(--ar)"></div></div>
-          <div class="track"><div class="fill" style="--w:94.2%; --c:var(--mtp)"></div></div>
+          <div class="track"><div class="fill" style="--w:34.7%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:100%; --c:var(--mtp)"></div></div>
         </div>
-        <span class="value">27.16 / 75.38 <em>tok/s</em></span>
+        <span class="value">27.19 / 78.42 <em>tok/s</em></span>
       </div>
       <div class="bar-row">
         <span class="bar-label">128K</span>
         <div class="pair">
-          <div class="track"><div class="fill" style="--w:31.6%; --c:var(--ar)"></div></div>
-          <div class="track"><div class="fill" style="--w:93.8%; --c:var(--mtp)"></div></div>
+          <div class="track"><div class="fill" style="--w:32.4%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:95.8%; --c:var(--mtp)"></div></div>
         </div>
-        <span class="value">25.24 / 75.02 <em>tok/s</em></span>
+        <span class="value">25.41 / 75.16 <em>tok/s</em></span>
       </div>
       <div class="bar-row">
         <span class="bar-label">256K</span>
         <div class="pair">
-          <div class="track"><div class="fill" style="--w:29.9%; --c:var(--ar)"></div></div>
-          <div class="track"><div class="fill" style="--w:90.7%; --c:var(--mtp)"></div></div>
+          <div class="track"><div class="fill" style="--w:30.7%; --c:var(--ar)"></div></div>
+          <div class="track"><div class="fill" style="--w:91.8%; --c:var(--mtp)"></div></div>
         </div>
-        <span class="value">23.88 / 72.58 <em>tok/s</em></span>
+        <span class="value">24.09 / 71.95 <em>tok/s</em></span>
       </div>
     </div>
   </section>
@@ -421,30 +421,30 @@
       <tbody>
         <tr>
           <td>8K</td>
-          <td>1600.90 ± 13.44</td>
-          <td>26.70 ± 2.33</td>
-          <td>42.25 ± 0.42 <span class="delta">1.58× AR</span></td>
-          <td><span class="pill low">59% (72/122)</span></td>
+          <td>1631.19 ± 10.97</td>
+          <td>28.27 ± 0.37</td>
+          <td>45.36 ± 1.45 <span class="delta">1.60× AR</span></td>
+          <td><span class="pill low">64% (78/122)</span></td>
         </tr>
         <tr>
           <td>32K</td>
-          <td>1542.13 ± 2.74</td>
-          <td>27.16 ± 0.20</td>
-          <td>75.38 ± 0.97 <span class="delta">2.78× AR</span></td>
-          <td><span class="pill">94% (110/117)</span></td>
+          <td>1571.90 ± 2.11</td>
+          <td>27.19 ± 0.14</td>
+          <td>78.42 ± 2.72 <span class="delta">2.88× AR</span></td>
+          <td><span class="pill">100% (111/111)</span></td>
         </tr>
         <tr>
           <td>128K</td>
-          <td>1473.04 ± 1.73</td>
-          <td>25.24 ± 0.03</td>
-          <td>75.02 ± 0.96 <span class="delta">2.97× AR</span></td>
+          <td>1506.40 ± 0.25</td>
+          <td>25.41 ± 0.10</td>
+          <td>75.16 ± 2.21 <span class="delta">2.96× AR</span></td>
           <td><span class="pill">100% (111/111)</span></td>
         </tr>
         <tr>
           <td>256K</td>
-          <td>1405.18 ± 0.57</td>
-          <td>23.88 ± 0.02</td>
-          <td>72.58 ± 0.91 <span class="delta">3.04× AR</span></td>
+          <td>1446.26 ± 2.00</td>
+          <td>24.09 ± 0.23</td>
+          <td>71.95 ± 2.11 <span class="delta">2.99× AR</span></td>
           <td><span class="pill">100% (111/111)</span></td>
         </tr>
       </tbody>
