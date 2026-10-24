@@ -84,11 +84,17 @@ void ApplyPenalties(std::vector<Candidate>* candidates,
                     std::span<const TokenPenalty> penalties) {
   if (penalties.empty())
     return;
+  // Candidates arrive in ascending token order and penalties are sorted:
+  // one merge pass replaces a binary search per candidate.
+  std::size_t penalty_index = 0;
   for (auto& candidate : *candidates) {
-    const auto found = std::ranges::lower_bound(penalties, candidate.token, {},
-                                                &TokenPenalty::token);
-    if (found != penalties.end() && found->token == candidate.token)
-      candidate.logit = Penalize(candidate.logit, config, *found);
+    while (penalties[penalty_index].token < candidate.token) {
+      if (++penalty_index == penalties.size())
+        return;
+    }
+    if (penalties[penalty_index].token == candidate.token)
+      candidate.logit =
+          Penalize(candidate.logit, config, penalties[penalty_index]);
   }
 }
 
@@ -383,13 +389,11 @@ SamplingDistribution BuildDistribution(
     std::span<const float> logits, const SamplingConfig& config,
     std::span<const TokenId> prompt_tokens,
     std::span<const TokenId> generated_tokens) {
-  std::unordered_map<TokenId, TokenPenalty> counts;
+  std::vector<TokenPenalty> penalties;
   if (config.frequency_penalty != 0 || config.presence_penalty != 0) {
-    for (const auto token : generated_tokens) {
-      auto& p = counts[token];
-      p.token = token;
-      ++p.generated_count;
-    }
+    penalties.reserve(generated_tokens.size());
+    for (const auto token : generated_tokens)
+      penalties.push_back({.token = token, .generated_count = 1});
   }
   if (config.repeat_penalty != 1 && config.repeat_last_n != 0) {
     const auto tail = generated_tokens.last(
@@ -397,17 +401,22 @@ SamplingDistribution BuildDistribution(
     const auto prompt_tail = prompt_tokens.last(
         std::min(prompt_tokens.size(), config.repeat_last_n - tail.size()));
     for (auto sequence : {prompt_tail, tail}) {
-      for (const auto token : sequence) {
-        auto& p = counts[token];
-        p.token = token;
-        p.repeated = 1;
-      }
+      for (const auto token : sequence)
+        penalties.push_back({.token = token, .repeated = 1});
     }
   }
-  std::vector<TokenPenalty> penalties;
-  for (const auto& [token, penalty] : counts)
-    penalties.push_back(penalty);
+  // Flat accumulate, then fold duplicates: counts sum, repeated flags merge.
   std::ranges::sort(penalties, {}, &TokenPenalty::token);
+  auto write = penalties.begin();
+  for (auto read = penalties.begin(); read != penalties.end(); ++read) {
+    if (write != penalties.begin() && (write - 1)->token == read->token) {
+      (write - 1)->generated_count += read->generated_count;
+      (write - 1)->repeated |= read->repeated;
+    } else {
+      *write++ = *read;
+    }
+  }
+  penalties.erase(write, penalties.end());
   return DistributionWithPenalties(logits, config, penalties);
 }
 
