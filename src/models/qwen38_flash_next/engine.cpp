@@ -559,10 +559,17 @@ bool Session::RestoreSnapshot(std::span<const std::uint8_t> payload,
   valid_ = false;
   rocm::Executor::SnapshotInfo info;
   const auto remaining = ContextSize() - header.token_count;
-  const auto next_drafts =
-      MtpEnabled() ? restored_policy.Choose(remaining ? remaining - 1 : 0,
-                                            header.token_count)
-                   : 0;
+  auto next_drafts = MtpEnabled()
+                         ? restored_policy.Choose(remaining ? remaining - 1 : 0,
+                                                  header.token_count)
+                         : 0;
+  if (MtpEnabled() && model_->draft_subset_) {
+    // The next request's sampler/head is not known yet. Avoid discarding
+    // existing scratch that either eligible policy can use after restore.
+    next_drafts = std::max(next_drafts,
+                           restored_policy.Choose(remaining ? remaining - 1 : 0,
+                                                  header.token_count, 0, true));
+  }
   if (!model_->executor_->RestoreSnapshot(
           *session_,
           std::span<const std::uint8_t>(
@@ -853,6 +860,7 @@ struct Session::PendingDecode {
   /// Committed index the copied tokens continue.
   std::size_t lookup_start{0};
   bool draft_subset{false};  ///< this cycle drafts through the subset head
+  bool sampled_subset_cost{false};
   std::uint32_t policy_concurrency{0};
 };
 
@@ -1008,16 +1016,16 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   // way alone and in any batch. Greedy requests draft small whenever they
   // cannot collide with another request's table. Every request keeps the
   // established length controller and AR backoff.
-  const bool allow_subset = MtpDraftSubsetAllowed(
-      sampler.config().uses_random_sampling(), concurrency, occupancy,
-      batch_drafts.has_value());
+  const bool allow_subset =
+      MtpDraftSubsetAllowed(sampler.config().uses_random_sampling(),
+                            concurrency, occupancy, batch_drafts.has_value());
   // Unplanned greedy and unseeded sampled cycles are priced at the requests
   // decoding now; seeded sampled ones keep the configured concurrency so they
   // replay the same widths, and a planned batch keeps the row its plan used.
   pending->policy_concurrency = MtpPolicyConcurrency(
       sampler.config().uses_random_sampling(), sampler.config().seed >= 0,
       batch_drafts.has_value(), occupancy);
-  const std::size_t width =
+  std::size_t width =
       MtpEnabled() && cap > 1
           ? 1 + (batch_drafts ? std::min<std::uint32_t>(*batch_drafts, cap - 1)
                  : survival   ? std::min<std::uint32_t>(
@@ -1076,6 +1084,25 @@ bool Session::PrepareDecode(const DecodeRequest& request,
                           draft_vocab_.Fits(anchor, [&](std::int32_t token) {
                             return model_->InDraftSubset(token);
                           });
+  // Wider verification slowed short resumed replies in matched controls.
+  // Keep the established costs within two blocks of the remaining budget.
+  // Full target rows (for example, active tool constraints) also keep their
+  // original costs; the smaller-head curve does not price their transfers.
+  // The fork prices sampled cycles whose verification reads GPU candidate
+  // lists (the fast_sampling gate in FinishDecode); upstream's
+  // CanCompactMtpVerification is not ported.
+  const bool compact_sampled =
+      sampled && platform::PlatformTuning().fast_sampling &&
+      sampler.config().top_k > 0 && !sampler.config().penalties_enabled();
+  pending->sampled_subset_cost =
+      compact_sampled && pending->draft_subset &&
+      std::min(max_tokens, room) > 2 * exec.max_speculative();
+  if (pending->sampled_subset_cost && !batch_drafts) {
+    // Price the head actually used, after vocabulary fallback and the copy
+    // bypass. The policy depends only on committed history, not timings.
+    width = 1 + draft_length_.Choose(static_cast<std::uint32_t>(cap - 1), base,
+                                     pending->policy_concurrency, true);
+  }
   if (!defer_head && !DraftCatchUp(anchor, true, error_msg,
                                    sampled ? &pending->candidates : nullptr,
                                    pending->draft_subset)) {
@@ -1316,9 +1343,9 @@ bool Session::FinishDecode(const DecodeRequest& request,
   stats_.small_head_cycles += pending.draft_subset;
   // A target stop ends the request; it does not classify the remaining
   // proposals as failed predictions.
-  draft_length_.Observe(observed,
-                        result->stop || mtp_all ? observed : mtp_drafts, base,
-                        pending.policy_concurrency);
+  draft_length_.Observe(
+      observed, result->stop || mtp_all ? observed : mtp_drafts, base,
+      pending.policy_concurrency, pending.sampled_subset_cost);
 
   // The next call knows the next sampled anchor. Defer draft catch-up until
   // then, retaining this session's target hidden rows across interleaving.

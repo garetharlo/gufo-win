@@ -96,10 +96,10 @@ void CheckEligibility() {
       for (const bool planned : {false, true}) {
         Require(qfn::MtpDraftSubsetAllowed(true, sessions, occupancy, planned),
                 "a sampled request lost the small head");
-        Require(qfn::MtpDraftSubsetAllowed(false, sessions, occupancy,
-                                           planned) ==
-                    (sessions == 1 || occupancy == 1 || planned),
-                "greedy eligibility changed");
+        Require(
+            qfn::MtpDraftSubsetAllowed(false, sessions, occupancy, planned) ==
+                (sessions == 1 || occupancy == 1 || planned),
+            "greedy eligibility changed");
       }
     }
   }

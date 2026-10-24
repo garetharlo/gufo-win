@@ -2528,9 +2528,11 @@ public:
     sampling::SamplerState working_sampler = sampler;
     QwenFlashNextSession::DecodeResult decoded;
     std::string error;
-    const auto budget =
-        std::min<std::size_t>(max_tokens, std::uint64_t{max_draft_tokens_} + 1);
-    if (!qfn.session().DecodeStep(budget, working_sampler, &decoded, &error)) {
+    // Use the same request policy as SelectNext and the batched MTP path.
+    // The engine bounds the physical block and stops at EOS. Preserve the
+    // remaining request budget so its policy can recognize a short tail.
+    if (!qfn.session().DecodeStep(max_tokens, working_sampler, &decoded,
+                                  &error)) {
       throw std::runtime_error("Qwen3.8-Flash-Next MTP decode failed: " +
                                error);
     }

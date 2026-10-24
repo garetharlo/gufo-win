@@ -14,8 +14,8 @@ TheRock ROCm 10.0.0 / clang 23 toolchain used for the Windows build.
 
 - Upstream: <https://github.com/gufo-org/gufo>
 - Review clone: `%TEMP%\opencode\gufo-upstream` (bare clone works; fetch +
-  `git show <sha>`). Last swept upstream `5c8bb39` (v0.22.0) on 2026-10-23,
-  see "Sweep 2026-10-23"
+  `git show <sha>`). Last swept upstream `d4eaaad` (2026-10-24) on 2026-10-24,
+  see "Sweep 2026-10-24"
 - Local base: upstream `fee9d2a` (PR #314 fix)
 - Local Windows HEAD at review: `c85aada`
 - Local fork already has Windows-specific work in
@@ -1101,6 +1101,50 @@ Verified end-to-end: `serve image` + one 832×832 generation through the
 staging path (28.5 GB resident weights, no stall, valid PNG).
 
 ---
+
+## Sweep 2026-10-24 (upstream `5c8bb39`..`d4eaaad`)
+
+Next sweep starts from `d4eaaad`. `#741`/`#743`/`#747` are Nix/Cachix
+build-side, not applicable to the Windows toolchain. `#738` (weights through
+the mapped_file leaf) is loader-wide across H3/ASR/TTS/image and the fork
+lacks `core/platform/mapped_file.hpp`; watch item, same family as the Windows
+loading-path gap at the bottom of this file. `#700` (EmbeddingGemma) is a
+feature, not perf. `#733`/`#739` landed in `4bae9f4`.
+
+### [x] #742 - reduce selector spills and improve sampled drafting
+
+Upstream `d4eaaad`, ported 2026-10-24. Three parts:
+
+- `SelectScoreKernel` head loop: `#pragma unroll 1` under
+  `__clang_major__ >= 23` (LLVM 23 hoists all four heads and spills to
+  private memory; the Windows build is exactly clang 23).
+- `kMtpSampledSubsetMilliseconds` cost curve in `mtp_costs.hpp`, threaded
+  through `MtpCycleCosts`/`MtpLengthController::Choose/Observe` as
+  `sampled_subset`; first cycle stays conservative until acceptance is
+  observed.
+- Engine: `PendingDecode::sampled_subset_cost` + width re-pricing after
+  vocabulary fallback, `FinishDecode` observes with the subset flag, snapshot
+  restore keeps scratch for either head, and `inference_backend.cpp` passes
+  the full request budget to `DecodeStep` so the policy can see a short tail.
+
+Fork divergence: upstream gates the cost on
+`gpu_verification = gpu_greedy || CanCompactMtpVerification(sampler)`; the
+fork has no `CanCompactMtpVerification`, so the gate is the fork's equivalent
+`fast_sampling` candidate-list conditions (`top_k > 0`, no penalties) that
+`FinishDecode` itself uses. Fork merge note: `Choose` keeps the fork-only
+`survival` branch upstream of the re-pricing, and the re-priced width only
+runs for non-batch (sampled cohorts are never jointly planned).
+
+Gates: greedy haiku byte-identical vs base (seed 42, 32 tok); sampled output
+identical (seed 42 t1, seed 7 t1 top-k 64 n128 — the compact candidate path
+determinism holds across the width change); bench neutral (tg128 29.72 vs
+29.42, d32K 27.06 vs 26.90, within noise; bench is greedy, so the subset-cost
+path cannot fire there, same as #664's occupancy pricing). New
+`CheckSampledSubsetCosts` in `mtp_sampling_test.cpp` passes. Not measured:
+served multi-session sampled A/B; the pricing matters under concurrency this
+host benches only via the HTTP stack. `projection_ops_test` fails at HEAD
+before this change (exit 0xc0000135, missing DLL in the bench environment) —
+pre-existing, unrelated.
 
 ## Sweep 2026-10-23 (upstream `53ebb51`..`5c8bb39`, v0.21.0 + v0.22.0)
 

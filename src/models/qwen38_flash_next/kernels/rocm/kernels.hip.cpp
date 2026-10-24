@@ -2347,7 +2347,14 @@ __global__ void SelectScoreKernel(const float* q, const __half* blocks,
   for (unsigned i = 0; i < kSelectDim; ++i)
     key[i] = __half2float(blocks[std::size_t{b} * kSelectDim + i]);
   float total = 0.0F;
+#if __clang_major__ >= 23
+  // Newer LLVM versions hoist queries from all four unrolled heads,
+  // overflowing the scalar register file. LLVM 23 also spills into private
+  // memory. Keep one head live without changing the FMA or reduction order.
+#pragma unroll 1
+#else
 #pragma unroll
+#endif
   for (unsigned h = 0; h < kSelectHeads; ++h) {
     const auto* query = q + (std::size_t{t0} * kSelectHeads + h) * kSelectDim;
     float partial[32];
