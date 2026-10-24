@@ -590,6 +590,16 @@ void TestRunnerOutputBoundary(const std::filesystem::path& root) {
 
 }  // namespace
 
+/// Symlink fixtures need privileges Windows Medium-integrity processes lack;
+/// production is Linux-only, so skip the hardening checks when unavailable.
+bool SymlinksAvailable(const std::filesystem::path& root) {
+  std::error_code error;
+  std::filesystem::create_symlink(root, root / "probe", error);
+  bool available = !error;
+  std::filesystem::remove(root / "probe", error);
+  return available;
+}
+
 int main() {
   const std::filesystem::path base =
       std::filesystem::temp_directory_path() /
@@ -600,7 +610,11 @@ int main() {
   TestQueueLifecycleAndRecovery(base / "lifecycle");
   TestPpmAndExpiry(base / "ppm");
   TestValidation(base / "validation");
-  TestRecoveryHardening(base / "recovery-hardening");
+  if (SymlinksAvailable(base)) {
+    TestRecoveryHardening(base / "recovery-hardening");
+  } else {
+    std::cout << "Skipping symlink recovery hardening (no privilege).\n";
+  }
   TestRunnerExceptionRecovery(base / "runner-exception");
   TestRunnerOutputBoundary(base / "runner-output-boundary");
   std::filesystem::remove_all(base, ignored);

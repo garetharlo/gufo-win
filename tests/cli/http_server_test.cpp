@@ -761,7 +761,9 @@ void TestExpectContinue() {
     std::string response;
     char buffer[4096];
     while (response.size() < interim.size()) {
-      const auto count = ::read(fd, buffer, interim.size() - response.size());
+      // ::read() is invalid on Windows sockets; use the portable helper.
+      const auto count = gufo::platform::SocketRead(
+          fd, buffer, interim.size() - response.size());
       assert(count > 0);
       response.append(buffer, static_cast<std::size_t>(count));
     }
@@ -769,7 +771,7 @@ void TestExpectContinue() {
     assert(::send(fd, "hello", 5, MSG_NOSIGNAL) == 5);
     response.clear();
     for (;;) {
-      const auto count = ::read(fd, buffer, sizeof(buffer));
+      const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
       assert(count >= 0);
       if (count == 0)
         break;
