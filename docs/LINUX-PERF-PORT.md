@@ -1448,3 +1448,17 @@ serialization but cannot be kept: the 103.69 GiB device allocation plus a
 repeated loads measured 29.15 s and 53.54 s — faster at best, unstable in
 practice. The experiment was reverted; `O_DIRECT` stays until the shard is no
 longer mapped while it is read.
+
+Measured 2026-10-24, the cheap version of #738: `WeightUpload` read tensor
+ranges with `memcpy` from the shard's existing mapping (`GgufMappedRegion::data`,
+no `pread`, no `O_DIRECT`, no page-cache duplication) instead of reopening the
+shard. Interleaved `bench -p 16 -n 8 -r 1` pairs on UD-Q4_K_XL:
+load 51.56 / 47.90 s (O_DIRECT) vs 50.62 / 55.69 s (mapped). No win, reverted.
+
+The reason is the drive, not the read path: the loader moves 103.69 GiB in
+48-52 s, i.e. 2.0-2.2 GiB/s, and a plain multi-threaded buffered read of the
+same shard on this host measures 0.5 GiB/s (one thread) to 1.3 GiB/s (sixteen).
+The loader is already at the disk ceiling, so the 16.42 s Linux figure is
+page-cache residency (100+ GiB of it) rather than a reader implementation gap.
+Loading is closed as an I/O-capacity item: no kernel or platform port changes
+it on this host.
