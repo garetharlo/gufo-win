@@ -14,8 +14,8 @@ TheRock ROCm 10.0.0 / clang 23 toolchain used for the Windows build.
 
 - Upstream: <https://github.com/gufo-org/gufo>
 - Review clone: `%TEMP%\opencode\gufo-upstream` (bare clone works; fetch +
-  `git show <sha>`). Last swept upstream `d4eaaad` (2026-10-24) on 2026-10-24,
-  see "Sweep 2026-10-24"
+  `git show <sha>`). Last swept upstream `aae1ac4` (2026-10-25) on 2026-10-25,
+  see "Sweep 2026-10-25"
 - Local base: upstream `fee9d2a` (PR #314 fix)
 - Local Windows HEAD at review: `c85aada`
 - Local fork already has Windows-specific work in
@@ -196,18 +196,25 @@ Acceptance: first-prompt latency drops; plans still exact-shape.
 Implemented in the fork before upstream (`5936051`): `prompt_lookup.hpp`
 (greedy/sampled gates, resume-after-edit, snapshot state), engine/CLI/serve
 wiring, tests. Upstream `8497711` is the follow-up of this work. Remaining
-delta: upstream defaults it on for single-session MTP; the fork keeps it
-opt-in (`engine.hpp` `prompt_lookup = false`). Upstream Linux measurements:
+delta: upstream defaults it on for single-session MTP; the fork now does too
+(`engine.hpp`, `prompt.hpp`, both `serve` parsers), so `--prompt-lookup` is an
+off switch only. Upstream Linux measurements:
 
 - rewrite/copy agent requests: **+40–46% decode** (e.g. 69.8 → 99.6 tok/s)
 - 25k follow-up aggregate case: **+27%**
 - prose: ~0%
 - some sampled extraction cases: **−5%**
 
-Local state: older `prompt_lookup.hpp` using `std::unordered_map`, and
-`ModelOptions::prompt_lookup = false` in `engine.hpp`. Upstream replaces it
-with a 315-line flat open-addressing implementation, resume-after-edit logic,
-and default-on behavior for single-session MTP.
+Local state: older `prompt_lookup.hpp` using `std::unordered_map`, now
+`ModelOptions::prompt_lookup = true` in `engine.hpp`. Upstream replaces the
+header with a 315-line flat open-addressing implementation and resume-after-edit
+logic.
+
+Measured after the default flip (2026-10-25, `gufo bench`, MTP with the
+shared-Q8_0 draft, synthetic repetition prompt): tg128 d32768 80.24 → 99.29
+tok/s (stock 0.24.0: 98.43), d0 58.81 → 60.49 (stock 35.51), d16384 56.13 →
+56.93 (stock 78.40; that row's greedy trajectory differs from stock's, so its
+lookup matches are rarer).
 
 Changes:
 
@@ -1101,6 +1108,33 @@ Verified end-to-end: `serve image` + one 832×832 generation through the
 staging path (28.5 GB resident weights, no stall, valid PNG).
 
 ---
+
+## Sweep 2026-10-25 (upstream `d4eaaad`..`aae1ac4`, 0.23.0)
+
+Nothing to port. Next sweep starts from `aae1ac4`.
+
+The range is dominated by upstream porting its own POSIX code to Windows:
+#752 (`407cda2`), #757 (`2d1fb4d`) and #775 (`aae1ac4`) add
+`src/core/platform/{fs,mapped_file,pages,pages_*,net,os_info,publish,page_pin}`
+plus a Windows HIP runtime and disk-cache build. That layer replaces what this
+fork already does in `compat/win32`, and it lives on subsystems the fork does
+not have (`src/cache`, checkpoint stack). The one part that could have paid,
+the loader (`weight_upload.cpp`, `mapped_file`), is closed as I/O capacity here
+(see "Windows loading path" below).
+
+- `[-]` **#750** (`9c01c2f`) stop counting a connection once its response is
+  sent. The fork's `handle_connection` returns right after the response and
+  `reap_workers()` drops the worker, so a sent response cannot hold a slot
+  until the next accept. Revisit only if a measured overload produces 503s.
+- `[-]` **#732** (`68bfe92`) accept neutral llama.cpp sampler fields. Already
+  implemented independently in `sampling_request.hpp` (`disabled()`), with the
+  same neutral values. Sole divergence: DRY with a nonzero multiplier and a
+  zero window is inert upstream and rejected here; harmless, left alone.
+- N/A: #770/#751 (EmbeddingGemma attention/GEMM — model absent), #759 (image
+  embeddings — model absent), #736 (repeated `--served-model-name` — feature,
+  fork has one alias), #767 (portable test facilities — fork tests already
+  have Windows/in-process paths), #766/#769/#776 (CI and functional suites),
+  #755 (Nix rocm10), #754/#785 (docs).
 
 ## Sweep 2026-10-24 (upstream `5c8bb39`..`d4eaaad`)
 

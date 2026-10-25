@@ -33,7 +33,7 @@ struct PromptOptions {
   bool force_cpu = false;
   std::string speculative_backend;
   std::string mtp_model_path;
-  bool prompt_lookup = false;
+  bool prompt_lookup = true;
   std::string dflash_model_path;
   std::string draft_policy;
   // DeepSeek V4 Flash DSpark support model. DSpark is DS4's own drafter and

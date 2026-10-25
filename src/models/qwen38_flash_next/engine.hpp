@@ -58,7 +58,7 @@ struct ModelOptions {
   /// Fixed serving capacity used by the calibrated MTP cost model. Keeping
   /// it independent of scheduler timing preserves seeded request replay.
   std::uint32_t decode_concurrency = 1;
-  /// Opt-in MTP draft policies. Verification is unchanged, so outputs keep
+  /// MTP draft policies. Verification is unchanged, so outputs keep
   /// the target distribution (greedy text is byte-identical); they change
   /// how many tokens a cycle proposes and how cheaply.
   /// Sampled single-session drafting stops on a chain-survival estimate
@@ -66,7 +66,7 @@ struct ModelOptions {
   bool mtp_survival = false;
   /// Single-session prompt lookup: after an MTP draft, a match of 12+ tokens
   /// in the conversation proposes the tokens that followed it (PromptLookup).
-  bool prompt_lookup = false;
+  bool prompt_lookup = true;
   DraftVocabulary draft_vocabulary = DraftVocabulary::kFull;
 };
 

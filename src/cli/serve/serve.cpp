@@ -459,7 +459,7 @@ void PrintServeHelp(std::string_view program_name,
     std::size_t min_draft_tokens = 1;
     std::string mtp_policy = "length";
     std::string mtp_draft_vocab = "full";
-    bool prompt_lookup = false;
+    bool prompt_lookup = true;
     std::size_t prefill_chunk_tokens =
         server::kDefaultDecodeActivePrefillTokens;
     std::size_t max_pending_requests = 16;
@@ -929,7 +929,7 @@ int RunServe(std::span<const char* const> args) {
     std::size_t min_draft_tokens = 1;
     std::string mtp_policy = "length";
     std::string mtp_draft_vocab = "full";
-    bool prompt_lookup = false;
+    bool prompt_lookup = true;
     std::size_t prefill_chunk_tokens =
         server::kDefaultDecodeActivePrefillTokens;
     std::size_t max_pending_requests = 16;

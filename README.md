@@ -33,6 +33,25 @@ verbatim (drafts accepted 100%). Realistic mixed-prompt MTP decode at depth is
 with error bars and settings:
 [context sweep](docs/models/qwen3.8-flash-next/bench-context.html).
 
+Against upstream 0.24.0 (the stock `gufo` release binary, same files, same
+direct `gufo bench` calls, greedy, two repetitions, one process per mode,
+2026-10-25):
+
+| Depth | Mode | Gufo pp (tok/s) | upstream pp | Gufo tg (tok/s) | upstream tg | Gain tg |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 0 | AR | 1,635.54 | 1,684.74 | 35.09 | 27.68 | **+26.8%** |
+| 16,384 | AR | 1,467.02 | 1,465.02 | 32.81 | 28.20 | **+16.3%** |
+| 32,768 | AR | 1,443.07 | 1,443.87 | 32.10 | 28.54 | **+12.5%** |
+| 0 | MTP | 1,624.38 | 1,631.13 | 60.49 | 35.51 | **+70.3%** |
+| 16,384 | MTP | 1,435.99 | 1,413.58 | 56.93 | 78.40 | -27.4% |
+| 32,768 | MTP | 1,410.33 | 1,392.54 | 99.29 | 98.43 | +0.9% |
+
+Prefill stays within ±3% and loading within 1%. The one loss is a trajectory
+artefact, not engine speed: the Q4_1 decode copies shift decode numerics, and
+at 16K the bench pattern stops repeating, so prompt lookup finds 28 matches
+where upstream finds 102. With `GUFO_DECODE_COPY=off` that row reaches 89.05
+tok/s (+13.6%), at a cost of 6.8% at 32K on token-identical output.
+
 
 ## Models and benchmarks
 
@@ -104,7 +123,7 @@ Measured sampling options (single-session decoding, sampled, thinking on,
 | --- | --- | --- |
 | `--mtp-draft-vocab latin` | Draft head scores only Latin-script tokens (130K of 248K), half the output head per draft step | **+4.9% decode**, identical texts and acceptance; the only opt-in (`start.cmd` asks) |
 | `--mtp-policy survival` | Drafting stops when the per-proposal acceptance product falls below 0.40 instead of the length controller | **+8.7%** with the draft vocabulary (prose +7%, code +7%, reasoning +13%); on by default in `start.cmd` |
-| `--prompt-lookup` | A 12+-token conversation match proposes the tokens that followed it | File-editing replies **+10%** sampled; log quoting **+23%** greedy; prose unchanged; on by default in `start.cmd` |
+| `--prompt-lookup` | A 12+-token conversation match proposes the tokens that followed it | File-editing replies **+10%** sampled; log quoting **+23%** greedy; prose unchanged; on by default |
 
 Reproduce the context sweep yourself (one benchmark process at a time; the
 96 GB carve fits a single Q4 instance):
