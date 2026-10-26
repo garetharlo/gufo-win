@@ -35,22 +35,21 @@ with error bars and settings:
 
 Against upstream 0.24.0 (the stock `gufo` release binary, same files, same
 direct `gufo bench` calls, greedy, two repetitions, one process per mode,
-2026-10-25):
+2026-10-25; Gufo re-run 2026-10-26):
 
 | Depth | Mode | Gufo pp (tok/s) | upstream pp | Gufo tg (tok/s) | upstream tg | Gain tg |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| 0 | AR | 1,635.54 | 1,684.74 | 35.09 | 27.68 | **+26.8%** |
-| 16,384 | AR | 1,467.02 | 1,465.02 | 32.81 | 28.20 | **+16.3%** |
-| 32,768 | AR | 1,443.07 | 1,443.87 | 32.10 | 28.54 | **+12.5%** |
-| 0 | MTP | 1,624.38 | 1,631.13 | 60.49 | 35.51 | **+70.3%** |
-| 16,384 | MTP | 1,435.99 | 1,413.58 | 56.93 | 78.40 | -27.4% |
-| 32,768 | MTP | 1,410.33 | 1,392.54 | 99.29 | 98.43 | +0.9% |
+| 0 | AR | 1,650.36 | 1,684.74 | 35.44 | 27.68 | **+28.1%** |
+| 16,384 | AR | 1,470.40 | 1,465.02 | 32.96 | 28.20 | **+16.9%** |
+| 32,768 | AR | 1,440.37 | 1,443.87 | 31.87 | 28.54 | **+11.7%** |
+| 0 | MTP | 1,629.86 | 1,631.13 | 60.77 | 35.51 | **+71.1%** |
+| 16,384 | MTP | 1,435.42 | 1,413.58 | 76.37 | 78.40 | -2.6% |
+| 32,768 | MTP | 1,413.94 | 1,392.54 | 98.38 | 98.43 | -0.1% |
 
-Prefill stays within ±3% and loading within 1%. The one loss is a trajectory
+Prefill stays within ±2% and loading within 1%. The one loss is a trajectory
 artefact, not engine speed: the Q4_1 decode copies shift decode numerics, and
-at 16K the bench pattern stops repeating, so prompt lookup finds 28 matches
-where upstream finds 102. With `GUFO_DECODE_COPY=off` that row reaches 89.05
-tok/s (+13.6%), at a cost of 6.8% at 32K on token-identical output.
+at 16K the bench pattern stops repeating, so prompt lookup finds fewer matches
+than upstream. At 32K the trajectories re-converge and the row is at parity.
 
 
 ## Models and benchmarks
