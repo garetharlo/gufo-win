@@ -215,6 +215,43 @@ void TestSnapshotCanBranchIntoTwoIndependentStateSlots() {
   root_again.Invalidate();
 }
 
+void TestSnapshotRecordsOutnumberStateSlots() {
+  std::vector<std::size_t> invalidations(1);
+  std::size_t next_id = 0;
+  gufo::server::ContinuationCache cache(
+      1, [&] { return std::make_unique<FakeState>(next_id++, &invalidations); },
+      {
+          .restore =
+              [](gufo::server::ContinuationState& state,
+                 const gufo::server::ContinuationSnapshot& snapshot) {
+                dynamic_cast<FakeState&>(state).value =
+                    dynamic_cast<const FakeSnapshot&>(snapshot).value;
+              },
+          .capacity_bytes = [] { return 1024; },
+          .on_event = {},
+      },
+      8);
+
+  // Four conversations on one execution slot: records must outlive the state.
+  for (std::size_t turn = 1; turn <= 4; ++turn) {
+    std::vector<gufo::server::ContinuationToken> tokens(turn * 8, 0);
+    auto lease = cache.Acquire(tokens);
+    dynamic_cast<FakeState&>(lease.state()).value = turn;
+    Expect(lease.TryReserveSnapshot(sizeof(std::size_t), tokens.size()),
+           "snapshot-only record reserves capacity");
+    lease.Commit(tokens, std::make_unique<FakeSnapshot>(turn));
+  }
+
+  for (std::size_t turn = 1; turn <= 4; ++turn) {
+    std::vector<gufo::server::ContinuationToken> tokens(turn * 8, 0);
+    auto lease = cache.Acquire(tokens);
+    Expect(lease.cache_hit() && lease.cached_tokens() == tokens.size(),
+           "snapshot-only records restore without extra state slots");
+    Expect(dynamic_cast<FakeState&>(lease.state()).value == turn,
+           "each snapshot-only record keeps its own payload");
+  }
+}
+
 void TestByteCapacityEvictsBeforeSnapshotAllocation() {
   using gufo::server::SnapshotEventAction;
   using gufo::server::SnapshotEventReason;
@@ -605,6 +642,7 @@ int main() {
   TestLongestAvailablePrefixWins();
   TestWaitingAcquireCanBeCancelled();
   TestSnapshotCanBranchIntoTwoIndependentStateSlots();
+  TestSnapshotRecordsOutnumberStateSlots();
   TestByteCapacityEvictsBeforeSnapshotAllocation();
   TestConcurrentReservationsCannotOvercommitBudget();
   TestImpossibleReservationPreservesRetainedEntries();

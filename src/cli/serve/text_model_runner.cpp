@@ -62,6 +62,10 @@ std::size_t HostSnapshotBudgetBytes() {
 
 namespace {
 
+// Checkpoint records are snapshot payloads, not execution sessions; the
+// retained-snapshot byte budget bounds them, so the count stays fixed.
+constexpr std::size_t kSnapshotRecordCapacity = 128;
+
 struct ValidatedRunner {
   std::shared_ptr<TextModelRunner> runner;
   TextRunnerDescriptor descriptor;
@@ -468,10 +472,7 @@ struct TextRunnerPool::Impl {
               ReconcileStateBytes(validated.resources, *state);
               return state;
             },
-            MakeSnapshotSupport(&validated),
-            state_count <= std::numeric_limits<std::size_t>::max() / 2
-                ? state_count * 2
-                : state_count) {
+            MakeSnapshotSupport(&validated), kSnapshotRecordCapacity) {
     if (disk_cache_options.has_value()) {
       if (!validated.descriptor.persistence.has_value()) {
         throw std::invalid_argument(
@@ -536,19 +537,10 @@ struct TextRunnerPool::Request::Impl {
         sampler(sampling_config, prompt),
         context(std::move(prompt_context)),
         retain_fallback(cache_prefix_tokens != 0) {
-    // On a warm continuation the reused frontier is already a safe fallback.
-    // Freeze it before prefill, then process the entire new suffix together.
-    // Cold requests still checkpoint before mutable assistant framing.
+    // Checkpoint at the stable boundary of this prompt even on a warm hit:
+    // the previous frontier is already retained, and the new boundary is the
+    // prefix the next turn can reuse.
     auto count = cache_prefix_tokens == 0 ? prompt.size() : cache_prefix_tokens;
-    // A newly consumed image needs its own stable checkpoint. Otherwise the
-    // next assistant turn can invalidate the complete prompt's framing and
-    // force the image through prefill again from the older text frontier.
-    const bool new_images =
-        context && !std::ranges::equal(context->CacheIdentity(prefill_offset),
-                                       context->CacheIdentity(count));
-    if (retain_fallback && lease.cache_hit() && prefill_offset <= count &&
-        !new_images)
-      count = prefill_offset;
     if (lease.restored_from_disk() && prefill_offset == prompt.size())
       count = prompt.size();
     snapshot_tokens.reserve(prompt.size());

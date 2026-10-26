@@ -170,7 +170,10 @@ also accounts for tokenization changes where adjacent user/tool turns join.
 Qwen requests retain this checkpoint with thinking enabled or disabled.
 Warm continuations checkpoint the reused frontier and prefill the new suffix
 together. A second full-prompt checkpoint enables exact retries without
-prefill; both checkpoints share the existing snapshot-memory budget.
+prefill; both checkpoints share the existing snapshot-memory budget. Records are
+independent of `--sessions`: the server retains 128 checkpoint records (more
+when `--sessions` is higher), and the same byte budget bounds them. Extra
+records hold payloads only, not execution state.
 Exact live continuations reuse generated tokens. The server reports cached
 and newly processed tokens separately; resuming from the checkpoint processes
 the short suffix. System instructions, tool definitions and image identities
@@ -214,6 +217,12 @@ and add `--restore /tmp/cache-check.json`.
 Use `--image /path/to/image.png` for Qwen image conversations.
 Add `--append-image` to introduce the image after a cached text turn, and
 `--reasoning-effort high` to check a specific thinking effort.
+
+`python3 tools/serving/agent-session.py --url http://127.0.0.1:5815` replays a
+ten-turn tool-calling session instead, echoing each generated tool call back
+like a coding client, and prints per-turn cached versus re-read prompt tokens,
+first-token time and decode rate. Use it to check prompt reuse across turns;
+see [the agent-session comparison](AGENT-SESSION.md).
 Each case continues for a third turn; repeat `--case NAME` to select only the
 cases needed for a change.
 The check requires exact snapshot and matched-history replay. It separately

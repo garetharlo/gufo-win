@@ -976,7 +976,7 @@ void TestStableChatPrefixSurvivesInterruptedFraming() {
   next.Invalidate();
 }
 
-void TestWarmChatCheckpointsDoNotSplitPrefill() {
+void TestWarmChatCheckpointsAdvanceStableBoundary() {
   auto stats = std::make_shared<FakeStats>();
   TextRunnerPool pool(std::make_shared<SnapshotRunner>(stats), 1);
   Expect(pool.capacity() == 1 && stats->states_created == 1,
@@ -995,8 +995,10 @@ void TestWarmChatCheckpointsDoNotSplitPrefill() {
              continuation.cache_restore_bytes() == 0,
          "retained reasoning reuses generated tokens without a restore");
   const auto step = continuation.Prefill(64);
-  Expect(step.consumed_tokens == 3 && step.decode_ready,
-         "warm prefill processes user and assistant framing in one pass");
+  Expect(step.consumed_tokens == 1 && !step.decode_ready,
+         "a warm turn checkpoints its own stable boundary");
+  Expect(continuation.Prefill(64).decode_ready,
+         "the warm turn then finishes its suffix");
   const auto second = continuation.SelectNext().token;
   continuation.Advance();
   continuation.Commit();
@@ -1013,10 +1015,13 @@ void TestWarmChatCheckpointsDoNotSplitPrefill() {
   // Empty reasoning changes 40,41 into 50,51 in the replayed assistant.
   auto dropped = pool.Acquire({1, 2, 3, 40, 41, first, 7, 50, 51, 8, 40, 41},
                               {}, {}, {}, true, 10);
-  Expect(dropped.cached_prompt_tokens() == 6,
-         "the exact retry did not replace the earlier branching fallback");
+  Expect(dropped.cached_prompt_tokens() == 7,
+         "the warm checkpoint advanced reuse past the earlier frontier");
+  const auto retry = dropped.Prefill(64);
+  Expect(retry.consumed_tokens == 3 && !retry.decode_ready,
+         "the retry starts from the advanced boundary");
   Expect(dropped.Prefill(64).decode_ready,
-         "omitted reasoning prefills only the remaining suffix, in one pass");
+         "omitted reasoning finishes its remaining suffix");
   dropped.Cancel();
 }
 
@@ -1140,8 +1145,11 @@ void TestNewImageGetsAStableCheckpoint() {
                                  {}, image, true, 9);
     Expect(followup.cached_prompt_tokens() == 7,
            "rewritten assistant framing does not reprocess the earlier image");
+    const auto step = followup.Prefill(64);
+    Expect(step.consumed_tokens == 2 && !step.decode_ready,
+           "unchanged images checkpoint at this turn's stable boundary");
     Expect(followup.Prefill(64).decode_ready,
-           "unchanged images keep the single-pass warm prefill path");
+           "unchanged images keep warm prefill within one extra pass");
     followup.Commit();
   }
 }
@@ -1344,7 +1352,7 @@ int main() {
   TestCancellationRetainsOnlyCompletedWork();
   TestPromptReuseCanBeDisabledPerRequest();
   TestStableChatPrefixSurvivesInterruptedFraming();
-  TestWarmChatCheckpointsDoNotSplitPrefill();
+  TestWarmChatCheckpointsAdvanceStableBoundary();
   TestChatFallbackSurvivesSnapshotBudgetPressure();
   TestFullChatCheckpointRestoresWithoutSuffixPrefill();
   TestDiskOnlyCaptureReservesBudgetBeforeCommit();
