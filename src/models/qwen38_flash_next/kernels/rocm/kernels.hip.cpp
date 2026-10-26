@@ -2210,15 +2210,23 @@ __global__ void RopeKernel(float* x, std::uint32_t heads, std::uint32_t d,
                            const qwen::vision::DeviceRope* rope) {
   const std::uint32_t t = blockIdx.x;
   const std::uint32_t half = rotary_dim / 2;
+  // The (sin, cos) pair depends only on i, not the head: compute once per i
+  // instead of heads times, and keep the original rounded FMA order.
+  __shared__ float s_sin[128];
+  __shared__ float s_cos[128];
+  for (std::uint32_t i = threadIdx.x; i < half; i += blockDim.x) {
+    const float freq = powf(
+        theta, -2.0f * static_cast<float>(i) / static_cast<float>(rotary_dim));
+    sincosf(qwen::vision::RopePosition(rope, *start_pos + t, i) * freq,
+            &s_sin[i], &s_cos[i]);
+  }
+  __syncthreads();
   for (std::uint32_t idx = threadIdx.x; idx < heads * half; idx += blockDim.x) {
     const std::uint32_t h = idx / half;
     const std::uint32_t i = idx % half;
     float* v = x + (static_cast<std::size_t>(t) * heads + h) * d;
-    const float freq = powf(
-        theta, -2.0f * static_cast<float>(i) / static_cast<float>(rotary_dim));
-    float s = 0.0f;
-    float c = 0.0f;
-    sincosf(qwen::vision::RopePosition(rope, *start_pos + t, i) * freq, &s, &c);
+    const float s = s_sin[i];
+    const float c = s_cos[i];
     const float a = v[i];
     const float b = v[i + half];
     v[i] = a * c - b * s;
@@ -2340,48 +2348,38 @@ __global__ void SelectScoreKernel(const float* q, const __half* blocks,
                                   std::uint32_t ratio, std::uint32_t budget,
                                   std::uint32_t max_blocks) {
 #pragma clang fp reassociate(off)
+  // One warp scores one block: lane l owns key slice l (dim l + 32 * i). The
+  // shuffle tree with the original delta order reproduces partial[0] bit for
+  // bit, and the 128-float key no longer lives in one thread's registers
+  // (the per-thread version held 163 VGPRs and capped occupancy).
+  static_assert(kSelectDim == 32 * 4, "one slice per lane");
   const auto t0 = blockIdx.x;
   const auto complete = (*start_pos + first_token + t0 + 1) / ratio;
-  const auto b = blockIdx.y * blockDim.x + threadIdx.x;
+  const auto b = blockIdx.y * (blockDim.x / 32) + (threadIdx.x / 32);
+  const auto lane = threadIdx.x % 32;
   if (t0 >= n_tokens || complete <= budget || b >= complete)
     return;
-  float key[kSelectDim];
+  const auto* key = blocks + std::size_t{b} * kSelectDim;
+  float key4[4];
 #pragma unroll
-  for (unsigned i = 0; i < kSelectDim; ++i)
-    key[i] = __half2float(blocks[std::size_t{b} * kSelectDim + i]);
+  for (unsigned i = 0; i < 4; ++i)
+    key4[i] = __half2float(key[lane + i * 32]);
   float total = 0.0F;
-#if __clang_major__ >= 23
-  // Newer LLVM versions hoist queries from all four unrolled heads,
-  // overflowing the scalar register file. LLVM 23 also spills into private
-  // memory. Keep one head live without changing the FMA or reduction order.
-#pragma unroll 1
-#else
 #pragma unroll
-#endif
   for (unsigned h = 0; h < kSelectHeads; ++h) {
     const auto* query = q + (std::size_t{t0} * kSelectHeads + h) * kSelectDim;
-    float partial[32];
+    float dot = 0.0F;
 #pragma unroll
-    for (unsigned lane = 0; lane < 32; ++lane) {
-      float dot = 0.0F;
+    for (unsigned i = 0; i < 4; ++i)
+      dot = fmaf(query[lane + i * 32], key4[i], dot);
 #pragma unroll
-      for (unsigned i = 0; i < 4; ++i)
-        dot = fmaf(query[lane + i * 32], key[lane + i * 32], dot);
-      partial[lane] = dot;
-      // Bound query-load hoisting: keeping all 128 scalar values live spills
-      // registers on gfx1151. Scheduling groups retain every FMA and sum.
-      if ((lane + 1) % 16 == 0)
-        __builtin_amdgcn_sched_barrier(0);
-    }
-#pragma unroll
-    for (unsigned delta = 16; delta; delta >>= 1) {
-#pragma unroll
-      for (unsigned lane = 0; lane < delta; ++lane)
-        partial[lane] += partial[lane + delta];
-    }
-    total += fmaxf(partial[0], 0.0F);
+    for (unsigned delta = 16; delta; delta >>= 1)
+      dot += __shfl_down(dot, delta);
+    if (lane == 0)
+      total += fmaxf(dot, 0.0F);
   }
-  scores[std::size_t{t0} * max_blocks + b] = total;
+  if (lane == 0)
+    scores[std::size_t{t0} * max_blocks + b] = total;
 }
 
 /// Locate a descending histogram rank cooperatively over kBins bins with a
@@ -7055,7 +7053,9 @@ void SelectBlocks(const float* q, const __half* blocks, std::uint32_t* mask,
   // launch passes its live range, sparing the empty workgroups.
   const std::uint32_t grid_blocks =
       live_blocks != 0 ? std::min(live_blocks, max_blocks) : max_blocks;
-  const dim3 grid(n_tokens, (grid_blocks + kThreads - 1) / kThreads);
+  // One warp scores one block key.
+  const dim3 grid(n_tokens,
+                  (grid_blocks + kThreads / 32 - 1) / (kThreads / 32));
   hipLaunchKernelGGL(SelectScoreKernel, grid, dim3(kThreads), 0, stream, q,
                      blocks, scores, n_tokens, start_pos, first_token, ratio,
                      budget, max_blocks);
