@@ -465,6 +465,58 @@ public:
   }
 };
 
+class GrowingSnapshot final : public TextRunnerSnapshot {
+public:
+  GrowingSnapshot(std::size_t position, std::size_t bytes)
+      : position_(position), bytes_(bytes) {}
+
+  [[nodiscard]] std::size_t PayloadBytes() const noexcept override {
+    return bytes_;
+  }
+
+  [[nodiscard]] std::size_t position() const noexcept { return position_; }
+
+private:
+  std::size_t position_;
+  std::size_t bytes_;
+};
+
+/// A checkpoint whose payload grows with the position, like a real KV cache.
+class GrowingSnapshotRunner final : public SnapshotRunner {
+public:
+  using SnapshotRunner::SnapshotRunner;
+
+  [[nodiscard]] TextRunnerDescriptor Descriptor() const override {
+    auto descriptor = SnapshotRunner::Descriptor();
+    descriptor.max_context = 4096;
+    return descriptor;
+  }
+
+  [[nodiscard]] std::size_t SnapshotPayloadBytes(
+      const TextRunnerState& state) const override {
+    ++stats_->snapshot_size_queries;
+    return 64 + 8 * RequireFakeState(state).position;
+  }
+
+  [[nodiscard]] std::unique_ptr<TextRunnerSnapshot> Snapshot(
+      const TextRunnerState& state) const override {
+    ++stats_->snapshot_captures;
+    const auto& fake = RequireFakeState(state);
+    return std::make_unique<GrowingSnapshot>(fake.position,
+                                             SnapshotPayloadBytes(state));
+  }
+
+  void RestoreOrFork(TextRunnerState& state,
+                     const TextRunnerSnapshot& snapshot) const override {
+    const auto* growing = dynamic_cast<const GrowingSnapshot*>(&snapshot);
+    if (growing == nullptr) {
+      throw std::invalid_argument("snapshot type mismatch");
+    }
+    RequireFakeState(state).position = growing->position();
+    ++stats_->snapshot_restores;
+  }
+};
+
 class PersistentSnapshotRunner final : public SnapshotRunner {
 public:
   std::function<void()> before_serialize;
@@ -654,6 +706,37 @@ void TestSnapshotCacheBranchesOnePrefixIntoIndependentStates() {
   Expect(third.cache_hit() && third.cached_prompt_tokens() == 4,
          "branch commits preserve the shared root while capacity permits");
   third.Invalidate();
+}
+
+void TestSnapshotCacheFitsLongPrefixIntoBudget() {
+  auto stats = std::make_shared<FakeStats>();
+  auto runner = std::make_shared<GrowingSnapshotRunner>(stats, 64, 256, 24576);
+  TextRunnerPool pool(runner, 1);
+  std::vector<TextRunnerToken> prompt(4096);
+  for (std::size_t index = 0; index < prompt.size(); ++index)
+    prompt[index] = static_cast<TextRunnerToken>(index);
+
+  {
+    auto request = pool.Acquire(prompt, {}, {}, {}, true, 4000);
+    while (!request.prefill_complete()) {
+      Expect(request.Prefill(512).consumed_tokens > 0,
+             "long prefill makes progress");
+    }
+    request.Commit();
+  }
+
+  // Rewrite the turn after the stable boundary so the live frontier cannot
+  // serve the request and the cache must fall back to a snapshot.
+  auto next = prompt;
+  next[4000] ^= 1U;
+  auto restored = pool.Acquire(next, {}, {}, {}, true, 4000);
+  Expect(restored.cache_hit(), "fitted checkpoint is reusable");
+  Expect(restored.cached_prompt_tokens() >= 1024 &&
+             restored.cached_prompt_tokens() < 4000,
+         "reuse starts at the fitted checkpoint instead of the prompt head");
+  Expect(stats->snapshot_restores >= 1,
+         "the fitted checkpoint restores its state");
+  restored.Invalidate();
 }
 
 void TestSnapshotRetentionUsesPromptBoundary() {
@@ -1371,6 +1454,7 @@ int main() {
   TestResourceClaimsAreValidatedBeforeAllocation();
   TestSnapshotForkAndUnsupportedCapabilities();
   TestSnapshotCacheBranchesOnePrefixIntoIndependentStates();
+  TestSnapshotCacheFitsLongPrefixIntoBudget();
   std::ostringstream normal_log;
   auto* previous = std::clog.rdbuf(normal_log.rdbuf());
   TestSnapshotRetentionUsesPromptBoundary();
