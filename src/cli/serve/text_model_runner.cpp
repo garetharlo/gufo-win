@@ -19,9 +19,10 @@
 
 namespace gufo::server {
 
-/// A checkpoint larger than this no longer helps a single session and risks
-/// starving the host; operator overrides cannot raise the budget past it.
-constexpr std::uint64_t kMaxSnapshotBudgetBytes = 6ULL << 30;
+/// The automatic budget leaves half of available memory to the live state.
+/// Operators can raise it, up to a ceiling that still leaves the host usable.
+constexpr std::uint64_t kDefaultSnapshotBudgetGb = 6;
+constexpr std::uint64_t kMaxSnapshotBudgetGb = 7;
 
 /// An intermediate checkpoint must recover at least this much replay to be
 /// worth the copy it costs during prefill.
@@ -68,20 +69,25 @@ std::size_t HostSnapshotBudgetBytes() {
   }
   const auto available_size = static_cast<std::size_t>(std::min<std::uint64_t>(
       available, std::numeric_limits<std::size_t>::max()));
-  // The half-of-available default cannot retain a checkpoint near a long
-  // session's context, which pins reuse to the oldest prefix that fits.
-  if (const char* text = std::getenv("GUFO_CACHE_RAM_BYTES")) {
-    std::size_t requested = 0;
+  // A long session pins reuse to the oldest checkpoint unless the budget can
+  // reach its context. Cap the automatic half-of-available budget at 6 GiB;
+  // an operator can request up to 7 GiB when the host has room.
+  const auto default_bytes =
+      static_cast<std::size_t>(kDefaultSnapshotBudgetGb << 30);
+  std::size_t budget = std::min(available_size / 2, default_bytes);
+  if (const char* text = std::getenv("GUFO_CACHE_RAM_GB")) {
+    std::uint64_t gigabytes = 0;
     const std::string_view value(text);
     const auto parsed =
-        std::from_chars(value.data(), value.data() + value.size(), requested);
+        std::from_chars(value.data(), value.data() + value.size(), gigabytes);
     if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() &&
-        requested != 0) {
-      return std::min({requested, available_size,
-                       static_cast<std::size_t>(kMaxSnapshotBudgetBytes)});
+        gigabytes != 0) {
+      budget = std::min(available_size,
+                        static_cast<std::size_t>(
+                            std::min(gigabytes, kMaxSnapshotBudgetGb) << 30));
     }
   }
-  return available_size / 2;
+  return budget;
 }
 
 namespace {

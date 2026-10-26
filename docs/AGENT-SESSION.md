@@ -98,7 +98,7 @@ Path names are shared, so each row is a diff in our tree, not a missing file.
 | Stable boundary capture | prefill stops at the boundary, then a separate pass | captured inside the final prefill pass when it lands within 8 tokens of the batch end; the batch may carry up to 128 tokens past a 4,096 chunk |
 | Tool-turn replay | arguments parsed from JSON and re-rendered by the template | typed argument values rendered the way the reference templates' `tojson` does (and Responses namespaces flattened) so a replayed call reproduces the generated tokens and its checkpoint still matches |
 | Eviction policy | byte budget plus entry count | purpose ranking (retry / history / continuation / branch point); retry copies may not displace the last useful checkpoint of a prefix family; a shared prefix two conversations diverge after is never treated as covered |
-| Operator control | `GUFO_CACHE_RAM_BYTES` override (6 GiB cap), automatic half-of-available budget, fitted intermediate checkpoint | `--cache-ram-bytes`, `GUFO_CACHE_HOST_FLOOR_MB`, `GUFO_CACHE_REMOVAL_LOG`; a release profile with separate `subagents` values (`--sessions 4`, `--context 131072`, `--prefill-chunk 512`, `--mtp-draft-vocab latin`) |
+| Operator control | `GUFO_CACHE_RAM_GB` override (6 GiB default, 7 GiB cap), fitted intermediate checkpoint | `--cache-ram-bytes`, `GUFO_CACHE_HOST_FLOOR_MB`, `GUFO_CACHE_REMOVAL_LOG`; a release profile with separate `subagents` values (`--sessions 4`, `--context 131072`, `--prefill-chunk 512`, `--mtp-draft-vocab latin`) |
 
 Snapshot payload is not the constraint to solve first: per Bubo's own
 measurements a Flash-Next checkpoint is about 0.5 GB at 5k tokens, so 128
@@ -154,11 +154,15 @@ records only make sense behind a byte budget, which their defaults do
    replayed call rather than at its end.
 5. **Intermediate grid checkpoints** are implemented: when the stable boundary
    exceeds the budget, prefill stops once at the largest prefix below 90 % of it
-   and publishes that checkpoint before continuing. On UD-Q4_K_XL at a 3 GiB
-   budget and a 126,024-token prompt, the 126K boundary needs 3.58 GB and is
-   refused; the fitted 101,227-token checkpoint (2.70 GiB) let the next turn
-   re-read 24,820 instead of 126,047 tokens and reach its first token in 18.3 s
-   instead of 85.9 s. **Learned divergence points** remain: they make a shared
+   and publishes that checkpoint before continuing. The budget defaults to
+   6 GiB (`GUFO_CACHE_RAM_GB`, capped at 7 GiB or the available memory). On
+   UD-Q4_K_XL with a 126,024-token prompt, the default retained the
+   126,017-token boundary (3.58 GB); the next turn re-read 30 tokens and reached
+   its first token in 0.69 s instead of re-reading 126,047 tokens in 85.5 s. At
+   a 3 GiB budget the 126K boundary needs 3.58 GB and is refused; the fitted
+   101,227-token checkpoint (2.70 GiB) let the next turn re-read 24,820 instead
+   of 126,047 tokens and reach its first token in 18.1 s instead of 85.7 s.
+   **Learned divergence points** remain: they make a shared
    system prompt reusable across separate conversations and subagents. Take
    Bubo's tested policy rather than re-deriving it
    ([survey](LINUX-PERF-PORT.md)); upstream's narrower grid (`1b8ad798`, #773)

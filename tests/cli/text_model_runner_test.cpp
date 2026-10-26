@@ -1427,10 +1427,18 @@ void TestSnapshotCaptureFailureReleasesReservationAndKeepsRequestSuccessful() {
 }
 
 void TestCacheRamBudgetOverride() {
-  ::setenv("GUFO_CACHE_RAM_BYTES", "1048576", 1);
-  Expect(gufo::server::HostSnapshotBudgetBytes() == 1048576,
-         "GUFO_CACHE_RAM_BYTES replaces the automatic snapshot budget");
-  ::unsetenv("GUFO_CACHE_RAM_BYTES");
+  const auto automatic = gufo::server::HostSnapshotBudgetBytes();
+  Expect(automatic > 0 && automatic <= static_cast<std::size_t>(6ULL << 30),
+         "the automatic budget is capped at 6 GiB");
+  ::setenv("GUFO_CACHE_RAM_GB", "2", 1);
+  const auto two = gufo::server::HostSnapshotBudgetBytes();
+  Expect(two > 0 && two <= static_cast<std::size_t>(2ULL << 30),
+         "GUFO_CACHE_RAM_GB sizes the budget in gigabytes");
+  ::setenv("GUFO_CACHE_RAM_GB", "99", 1);
+  const auto capped = gufo::server::HostSnapshotBudgetBytes();
+  Expect(capped >= two && capped <= static_cast<std::size_t>(7ULL << 30),
+         "GUFO_CACHE_RAM_GB is capped at 7 GiB");
+  ::unsetenv("GUFO_CACHE_RAM_GB");
 }
 
 }  // namespace
