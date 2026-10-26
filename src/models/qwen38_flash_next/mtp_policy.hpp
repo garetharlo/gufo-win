@@ -281,6 +281,11 @@ public:
     cell.last_drafts = drafts;
     auto& count = cell.samples[drafts];
     auto& estimate = cell.ms[drafts];
+    // A sample far above the running estimate is a stall (preemption, page
+    // fault), not the cycle's cost; clamp its influence instead of letting
+    // one spike close a width for the whole occupancy/context bin.
+    if (count >= 2)
+      ms = std::min(ms, 4.0F * estimate);
     // Drop first-use graph/allocation cost once a warmed sample arrives.
     if (count < 2)
       estimate = ms;
@@ -290,7 +295,14 @@ public:
     ++cell.cycles;
   }
 
+  /// Test-only read of a cell's cost estimate, in ms.
+  [[nodiscard]] float ProbeMs(std::size_t concurrency, std::uint32_t context,
+                              std::uint32_t drafts) const noexcept {
+    return CellFor(concurrency, context).ms[drafts];
+  }
+
 private:
+  friend class MtpBatchControllerProbe;
   struct Cell {
     std::array<float, 8> ms{};
     std::array<unsigned, 8> samples{};
@@ -314,6 +326,43 @@ private:
   std::size_t last_concurrency_{0};
   unsigned last_context_bin_{0};
   unsigned stable_cycles_{0};
+};
+
+/// Online refinement of the static MTP accept-probability table: per-bin
+/// Beta counts (hits/misses) seeded with the measured prior and updated from
+/// each verified cycle, so the survival trim tracks the running
+/// model/quant/quantizer instead of one 2026-09-25 Windows measurement.
+/// Draft-side only: verification and greedy output never read it.
+class MtpAcceptTable {
+public:
+  static constexpr std::size_t kBins = 8;
+  static constexpr std::size_t kDepthClasses = 2;  // first proposal, later
+
+  void Seed(const std::array<std::array<float, kBins>, kDepthClasses>& prior,
+            float weight) noexcept {
+    for (std::size_t depth = 0; depth < kDepthClasses; ++depth) {
+      for (std::size_t bin = 0; bin < kBins; ++bin) {
+        hits_[depth][bin] = prior[depth][bin] * weight;
+        misses_[depth][bin] = (1.0F - prior[depth][bin]) * weight;
+      }
+    }
+  }
+
+  [[nodiscard]] float Estimate(std::size_t depth_class,
+                               std::size_t bin) const noexcept {
+    const float hits = hits_[depth_class][bin];
+    return hits / (hits + misses_[depth_class][bin]);
+  }
+
+  void Observe(std::size_t depth_class, std::size_t bin,
+               bool accepted) noexcept {
+    accepted ? hits_[depth_class][bin] += 1.0F
+             : misses_[depth_class][bin] += 1.0F;
+  }
+
+private:
+  std::array<std::array<float, kBins>, kDepthClasses> hits_{};
+  std::array<std::array<float, kBins>, kDepthClasses> misses_{};
 };
 
 }  // namespace gufo::models::qwen38_flash_next

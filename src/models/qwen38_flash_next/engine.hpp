@@ -232,6 +232,7 @@ public:
   /// A new request reusing cached context starts its own acceptance history.
   void ResetDraftPolicy() noexcept {
     draft_length_.Reset();
+    accept_table_ = {};
     // A fully reused prompt skips SyncImpl; it still starts a new request, so
     // do not inherit a copy cursor or widen its first step.
     lookup_.BeginRequest();
@@ -328,6 +329,7 @@ private:
   std::vector<float> verify_logits_;
   std::uint32_t hidden_base_{0};  ///< first position whose hidden row is kept
   MtpLengthController draft_length_;
+  MtpAcceptTable accept_table_;
   /// Index of tokens_ for ModelOptions::prompt_lookup.
   PromptLookup lookup_;
   SpeculativeStats stats_;

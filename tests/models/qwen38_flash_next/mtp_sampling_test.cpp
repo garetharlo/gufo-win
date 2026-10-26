@@ -312,6 +312,48 @@ void CheckSampledSubsetCosts() {
   }
 }
 
+void CheckAcceptTable() {
+  // Seed weight 1: one observation must move the estimate fully to 0 or 1.
+  qfn::MtpAcceptTable table;
+  const std::array<std::array<float, 8>, 2> prior{{
+      {0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F},
+      {0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F},
+  }};
+  table.Seed(prior, 1.0F);
+  Require(table.Estimate(0, 0) == 0.5F, "seeded estimate is not the prior");
+  table.Observe(0, 3, true);
+  table.Observe(1, 3, false);
+  Require(std::abs(table.Estimate(0, 3) - 0.75F) < 1e-6F &&
+              std::abs(table.Estimate(1, 3) - 0.25F) < 1e-6F,
+          "a weight-1 observation did not move the prior correctly");
+  // Bins are independent: the observation above must not touch bin 4.
+  Require(table.Estimate(0, 4) == 0.5F, "observation leaked across bins");
+  // Heavy prior resists a few contrary observations (no thrash on startup).
+  qfn::MtpAcceptTable sticky;
+  sticky.Seed(prior, 32.0F);
+  for (unsigned i = 0; i < 8; ++i) {
+    sticky.Observe(0, 0, false);
+  }
+  // 16/(32+8) = 0.4: the prior still anchors the bin after early misses.
+  Require(std::abs(sticky.Estimate(0, 0) - 0.4F) < 1e-6F,
+          "eight misses overpowered a weight-32 prior");
+}
+
+void CheckCostClamp() {
+  // A stall sample far above the running estimate must not shift the EMA by
+  // a quarter of the spike; after clamping it lands at 4x the estimate.
+  // Unclamped EMA: 10 + 0.25*(1000-10) = 257.5 ms. Clamped: <= 17.5 ms.
+  qfn::MtpBatchController controller;
+  // The first same-shape sample after a transition is dropped (catch-up),
+  // the second is cold; two more warm the estimate to 10 ms.
+  for (unsigned i = 0; i < 3; ++i)
+    controller.Observe(1, 1024, 1, 10.0F);
+  controller.Observe(1, 1024, 1, 1000.0F);  // stall
+  const float after_stall = controller.ProbeMs(1, 1024, 1);
+  Require(after_stall < 30.0F,
+          "a stall sample was not clamped before entering the cost EMA");
+}
+
 void CheckBatchProfitability() {
   qfn::MtpLengthController a(7), b(7);
   for (unsigned i = 0; i < 12; ++i) {
@@ -436,6 +478,8 @@ int main() {
     CheckCalibratedCosts();
     CheckSampledSubsetCosts();
     CheckBatchProfitability();
+    CheckAcceptTable();
+    CheckCostClamp();
     CheckCompactProposals();
     CheckSampledOutputFrequencies();
     const std::array<float, 5> logits{0.3F, -0.2F, 1.1F, 0.7F, -1.0F};

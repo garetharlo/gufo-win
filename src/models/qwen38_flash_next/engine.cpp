@@ -27,6 +27,37 @@
 namespace gufo::models::qwen38_flash_next {
 namespace {
 
+// Sampled drafting stops once the chain is unlikely to survive: each
+// proposal multiplies an acceptance estimate looked up from the draft head's
+// own top probability, and drafting ends when the product falls below
+// kMtpSurvivalFloor (the dropped proposal is not verified). The decision
+// uses only draft-side probabilities, so rejection-sampling verification
+// keeps the target distribution exact. Prior table: P(accept | reached) by
+// draft depth (first, later) and top-probability bin, measured over 2130
+// full 7-draft cycles on Windows (2026-09-25); replayed offline it beat the
+// per-cycle length controller by ~7.7% on held-out cycles. The runtime
+// estimate comes from Session::accept_table_, seeded with this prior and
+// refined online from every verified cycle.
+inline constexpr std::array<float, 8> kMtpTopBins = {0.30F, 0.50F, 0.70F, 0.80F,
+                                                     0.90F, 0.95F, 0.99F, 2.0F};
+inline constexpr std::array<std::array<float, 8>, 2> kMtpAcceptByTop = {{
+    {0.400F, 0.506F, 0.615F, 0.595F, 0.635F, 0.774F, 0.825F, 0.947F},
+    {0.337F, 0.484F, 0.522F, 0.584F, 0.640F, 0.711F, 0.702F, 0.935F},
+}};
+constexpr float kMtpSurvivalFloor = 0.40F;
+
+std::size_t MtpTopBin(const MtpProposal& proposal) {
+  float top = 0;
+  for (std::size_t i = 0; i < proposal.size; ++i) {
+    top = std::max(top, proposal.probabilities[i]);
+  }
+  std::size_t bin = 0;
+  while (top >= kMtpTopBins[bin]) {
+    ++bin;
+  }
+  return bin;
+}
+
 // gfx1151, served repository prompts: 4096-token chunks prefill 24K-102K
 // tokens 6-11% faster than 2048 (pp4096 +5% at d0, +6% at d32K). Each
 // chunk's n-gram gather doubles; next-chunk prefetch overlaps that read.
@@ -357,6 +388,7 @@ Session::Session(std::shared_ptr<Model> model,
                     model_->DecodeConcurrency()),
       draft_vocab_(kMtpDraftExtraRows - model_->draft_specials_) {
   logits_.resize(model_->VocabSize());
+  accept_table_.Seed(kMtpAcceptByTop, 32.0F);
 }
 
 bool Session::SyncDraftVocab(std::string* error_msg) {
@@ -894,37 +926,6 @@ bool CandidatesMatch(const MtpCandidateLogits& list,
 
 }  // namespace
 
-namespace {
-// Sampled drafting stops once the chain is unlikely to survive: each
-// proposal multiplies an acceptance estimate looked up from the draft head's
-// own top probability, and drafting ends when the product falls below
-// kMtpSurvivalFloor (the dropped proposal is not verified). The decision
-// uses only draft-side probabilities, so rejection-sampling verification
-// keeps the target distribution exact. Table: P(accept | reached) by draft
-// depth (first, later) and top-probability bin, measured over 2130 full
-// 7-draft cycles on Windows (2026-09-25); replayed offline it beat the
-// per-cycle length controller by ~7.7% on held-out cycles.
-constexpr std::array<float, 8> kMtpTopBins = {0.30F, 0.50F, 0.70F, 0.80F,
-                                              0.90F, 0.95F, 0.99F, 2.0F};
-constexpr std::array<std::array<float, 8>, 2> kMtpAcceptByTop = {{
-    {0.400F, 0.506F, 0.615F, 0.595F, 0.635F, 0.774F, 0.825F, 0.947F},
-    {0.337F, 0.484F, 0.522F, 0.584F, 0.640F, 0.711F, 0.702F, 0.935F},
-}};
-constexpr float kMtpSurvivalFloor = 0.40F;
-
-float MtpAcceptEstimate(std::size_t depth, const MtpProposal& proposal) {
-  float top = 0;
-  for (std::size_t i = 0; i < proposal.size; ++i) {
-    top = std::max(top, proposal.probabilities[i]);
-  }
-  std::size_t bin = 0;
-  while (top >= kMtpTopBins[bin]) {
-    ++bin;
-  }
-  return kMtpAcceptByTop[depth == 0 ? 0 : 1][bin];
-}
-}  // namespace
-
 void Session::AppendDraft(PendingDecode& pending) {
   if (pending.sampled) {
     pending.proposals.push_back(SampleMtpProposal(
@@ -1154,7 +1155,8 @@ bool Session::PrepareDecode(const DecodeRequest& request,
       }
       if (survival && !pending->proposals.empty()) {
         const std::size_t depth = pending->proposals.size() - 1;
-        alive *= MtpAcceptEstimate(depth, pending->proposals.back());
+        alive *= accept_table_.Estimate(depth == 0 ? 0 : 1,
+                                        MtpTopBin(pending->proposals.back()));
         // The first proposal is always kept (a speculative cycle).
         if (depth > 0 && alive < kMtpSurvivalFloor) {
           pending->chain.pop_back();
@@ -1346,6 +1348,17 @@ bool Session::FinishDecode(const DecodeRequest& request,
   draft_length_.Observe(
       observed, result->stop || mtp_all ? observed : mtp_drafts, base,
       pending.policy_concurrency, pending.sampled_subset_cost);
+  // Same per-proposal evidence refines the online accept table. Bin each
+  // proposal by its draft top-probability; every drafted MTP proposal up to
+  // the kept prefix was accepted, the next one (if drafted) was rejected.
+  if (!pending.proposals.empty()) {
+    const std::size_t mtp_proposals = std::min(
+        pending.proposals.size(), static_cast<std::size_t>(mtp_drafts));
+    for (std::size_t i = 0; i < mtp_proposals; ++i) {
+      accept_table_.Observe(i == 0 ? 0 : 1, MtpTopBin(pending.proposals[i]),
+                            i < mtp_accepted);
+    }
+  }
 
   // The next call knows the next sampled anchor. Defer draft catch-up until
   // then, retaining this session's target hidden rows across interleaving.
