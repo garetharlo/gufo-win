@@ -147,3 +147,9 @@ throughput separately. Run baseline and candidate close together; add
 repetitions only when noise or a suspected regression requires them.
 Record hardware/software identities and the exact timed scope. Use
 [profiling tools](PERFORMANCE.md) to explain a gain before retaining it.
+
+On Windows, `gufo.exe` needs the DLLs that CMake copies into the build
+directory (`build\release`, `build\gpu-test`). Run it from there, or copy the
+whole directory's `*.dll` next to any exe moved elsewhere (copying just the exe
+fails with exit code `-1073741515` / `0xC0000135`, missing DLL). The toolchain
+bin dir `C:\TheRock\build\bin` alone is not sufficient.
