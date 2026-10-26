@@ -15,7 +15,21 @@ param(
   [switch]$DryRun,
   [string]$Bin = "",
   # Testing: key presses to replay instead of reading the keyboard (E = Enter).
-  [string]$Keys = ""
+  [string]$Keys = "",
+  # Deterministic feature overrides, e.g. "vision=off,think=on" (name=on|off,
+  # comma-separated). Applied after saved settings; unavailable features clamp.
+  [string]$Features = "",
+  # Engine --reasoning-effort level; empty = the model profile default.
+  [ValidateSet("", "auto", "minimal", "low", "medium", "high", "xhigh", "max")]
+  [string]$ReasoningEffort = "",
+  # Optional engine overrides for scripted (non-interactive) runs; 0/"" = the
+  # launcher's own menu defaults (interactive use unchanged).
+  [int]$Context = 0,
+  [int]$Port = 0,
+  [int]$Sessions = 0,
+  [int]$MaxPendingPerClient = 0,
+  [int]$PrefillChunk = 0,
+  [string]$CacheDiskDir = ""
 )
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "inventory.ps1")
@@ -30,6 +44,8 @@ if (-not $exe) {
   Write-Host "gufo.exe not found. Build it with tools\windows\build.ps1, or use the prebuilt package." -ForegroundColor Yellow
   exit 1
 }
+# builds drift (gufo-master dropped these); only emit switches the target exe knows
+$exeHelp = (& $exe serve llm --help 2>$null) -join "`n"
 
 # hipBLASLt's kernel files have long names; past Windows' 260-character path
 # limit it crashes on the first matrix multiply, so say so up front.
@@ -68,8 +84,9 @@ function Get-PortOwner([int]$Port) {
 
 function Start-Plan($Plan) {
   $gufoArgs = @($Plan.Args)
-  $port = 8888
-  # -Last replays a saved plan; older ones still carry another port.
+  # -Last replays a saved plan; older ones still carry another port. Explicit
+  # -Port override wins, else pin 8888 (console expects it).
+  $port = if ($Port) { $Port } else { 8888 }
   $portIndex = [array]::IndexOf($gufoArgs, "--port")
   if ($portIndex -ge 0) { $gufoArgs[$portIndex + 1] = "$port" }
   $owner = Get-PortOwner $port
@@ -113,6 +130,8 @@ $targets = @($all | Where-Object { $_.Kind -eq "target" -and $_.MissingShards.Co
 # Per target: the draft, the vision sidecar and which features apply.
 function Get-Option($Target) {
   $info = Get-GufoFamilyInfo $Target.Family
+  # HF-style model id (repo:quant) when the file came from the HF cache
+  if ($Target.Repo -and $Target.Quant) { $info.ServedName = "$($Target.Repo):$($Target.Quant)" }
   $draft = $null; $draftKind = ""
   switch ($Target.Family) {
     "fn" { $draft = @(Get-GufoCompanions $Target $all "mtp" | ForEach-Object { $_.Record }) | Select-Object -First 1; if ($draft) { $draftKind = "MTP" } }
@@ -223,10 +242,15 @@ function New-Plan($o, $f) {
     @("--temperature", $temp.ToString($invariant), "--top-p", $topP.ToString($invariant), "--top-k", "$topK", "--min-p", "0")
   } else { @("--temperature", "0.7", "--top-p", "0.8", "--top-k", "20", "--min-p", "0") }
   $hostName = if ($f.Lan) { "0.0.0.0" } else { "127.0.0.1" }
-  $server = @("serve", "--host", $hostName, "--port", "8888", "--sessions", "1")
+  $server = @("serve", "--host", $hostName, "--port", "$(if ($Port) { $Port } else { 8888 })",
+    "--sessions", "$(if ($Sessions) { $Sessions } else { 1 })")
   if ($f.Vision) { $server += @("--max-request-bytes", "33554432") }   # base64 images next to a long chat
-  $llm = @("llm", "--model", $t.Path, "--served-model-name", $o.Info.ServedName, "--context", "$($f.Context)",
+  $llm = @("llm", "--model", $t.Path, "--served-model-name", $o.Info.ServedName, "--context", "$(if ($Context) { $Context } else { $f.Context })",
     "--max-output-bytes", "8388608", "--think", $(if ($f.Think) { "on" } else { "off" })) + $sampling
+  if ($script:ReasoningEffort -and $exeHelp -match '--reasoning-effort') { $llm += @("--reasoning-effort", $script:ReasoningEffort) }
+  if ($MaxPendingPerClient) { $llm += @("--max-pending-per-client", "$MaxPendingPerClient") }
+  if ($PrefillChunk) { $llm += @("--prefill-chunk", "$PrefillChunk") }
+  if ($CacheDiskDir -and $exeHelp -match '--cache-disk ') { $llm += @("--cache-disk", $CacheDiskDir) }
   $vars = [ordered]@{}
   $labels = @()
   if ($f.Spec -and $o.DraftKind) {
@@ -245,11 +269,11 @@ function New-Plan($o, $f) {
     }
     $labels += $o.DraftKind
     if ($family -ne "27b") {
-      if ($f.Survival) { $llm += @("--mtp-policy", "survival"); $labels += "survival" }
-      if ($f.Vocab) { $llm += @("--mtp-draft-vocab", "latin"); $labels += "latin vocab" }
-      if ($f.Lookup) { $llm += "--prompt-lookup" }
+      if ($f.Survival -and $exeHelp -match '--mtp-policy') { $llm += @("--mtp-policy", "survival"); $labels += "survival" }
+      if ($f.Vocab -and $exeHelp -match '--mtp-draft-vocab') { $llm += @("--mtp-draft-vocab", "latin"); $labels += "latin vocab" }
+      if ($f.Lookup -and $exeHelp -match '--prompt-lookup') { $llm += "--prompt-lookup"; $labels += "lookup" }
     }
-    if ($f.Lookup) { $labels += "lookup" }
+    if ($f.Lookup -and $family -eq "27b") { $labels += "lookup" }
   } else { $labels += "no speculation" }
   if ($f.Vision) { $llm += @("--mmproj", $o.Vision.Path); $labels += "vision" }
   if ($f.Lan) {
@@ -282,6 +306,19 @@ while ($true) {
   if (-not [int]::TryParse([string]$key.KeyChar, [ref]$n) -or $n -lt 1 -or $n -gt [math]::Min(9, $options.Count)) { continue }
   $o = $options[$n - 1]
   $f = Get-Features $o
+  if ($Features) {
+    # console overrides win over remembered choices
+    foreach ($kv in ($Features -split ",")) {
+      $p = $kv -split "=", 2
+      $hit = @($f.Keys) | Where-Object { $_ -ieq $p[0] } | Select-Object -First 1
+      if ($p.Count -eq 2 -and $hit) { $f[$hit] = ($p[1] -eq "on") }
+    }
+    # clamp to what this model actually has (same rules as Get-Features)
+    if (-not $o.DraftKind) { $f.Spec = $false }
+    if (-not $o.Vision) { $f.Vision = $false }
+    if ($o.Target.Family -eq "27b") { $f.Survival = $false; $f.Vocab = $false }
+    if ($o.Contexts -notcontains [int]$f.Context) { $f.Context = $o.Context }
+  }
   $back = $false
   while (-not $back) {
     Show-Features $o $f

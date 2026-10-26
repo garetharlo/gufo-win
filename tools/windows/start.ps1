@@ -220,6 +220,8 @@ $targets = @($all | Where-Object { $_.Kind -eq "target" } |
 # Per target: its companions, its speed modes and its recommended context.
 function Get-TargetPlanBase($Target) {
   $info = Get-GufoFamilyInfo $Target.Family
+  # HF-style model id (repo:quant) when the file came from the HF cache
+  if ($Target.Repo -and $Target.Quant) { $info.ServedName = "$($Target.Repo):$($Target.Quant)" }
   $drafts = @()
   $modes = @()
   $vision = $null
