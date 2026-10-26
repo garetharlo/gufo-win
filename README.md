@@ -100,6 +100,22 @@ Interleaved A/B versus v0.1.0 (`gufo bench -p 2048 -n 128 -r 1`, MTP):
 Draft acceptance was identical (63%) in the sampled A/B, so the decode gains
 are the ported fixes, not sampling luck.
 
+October 26, 2026 (v0.3.0): Q4_1 decode weight copies (large dense Q8_0
+projections decode from a least-squares-refit Q4_1 copy) and MTP prompt lookup
+on by default. Long-context sweep, same protocol as above:
+
+| metric | v0.2.0 | v0.3.0 | delta |
+| --- | ---: | ---: | ---: |
+| MTP tg128, 8K context | 45.66 tok/s | 57.16 | **+25%** |
+| MTP tg128, 32K context | 78.81 tok/s | 96.79 | **+23%** |
+| MTP tg128, 131K context | 75.03 tok/s | 92.47 | **+23%** |
+| MTP tg128, 256K context | 72.10 tok/s | 87.71 | **+22%** |
+| AR tg128, 8K / 256K context | 28.51 / 24.21 tok/s | 33.52 / 27.35 | +18% / +13% |
+| pp2048, 8K context | 1,626.37 tok/s | 1,637.48 | +0.7% |
+
+The Q4_1 copies change decode numerics; `GUFO_DECODE_COPY=off` restores the
+exact Q8_0 path.
+
 Windows decode switches stay high-speed and bit-identical: with every Windows
 switch on, logit dumps are bit-identical at all 4,418 positions and seeded
 decode is byte-identical to the Linux path (sampled probes):
