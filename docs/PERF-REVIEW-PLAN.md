@@ -123,3 +123,59 @@ re-litigated):
 Conclusion: inside this scope the remaining static candidates are below
 measurement noise. The real gap (pp2048 prefill) needs Step 2 profiling, not
 more reading.
+
+## Review follow-up: fix, bench recipe, host workflow (2026-10-25)
+
+Commits from this pass: `c6f8c070` (n-gram incremental mix), `8b8ac115`
+(drafting vector reuse), `9b00ab72` (this document), `24d220e1`
+(SmallGemm materialize fix, see below). All verified: 14/14
+`qwen38_flash_next.*` ctest green, `check-format.py` pass.
+
+### SmallGemm width instability (found by the suite, fixed)
+
+`projection_ops` failed "small projection changes with batch width": a row's
+low bits differed between the `tokens=1` and `tokens=2` instantiations of
+`SmallGemmKernel`. Root cause: the inner `dot += w*x` chain let the
+compiler's FMA contraction differ **between template instantiations**; the
+per-`acc` `Materialize` barrier was not enough. Fix: materialize every
+product in the chain (`24d220e1`), matching the existing pattern in the
+sibling kernels. Lesson for any future width-templated kernel: if output must
+be bit-identical across instantiations, `Materialize` (or equivalent) every
+accumulation step, not just the loop-carried sum. Diagnosis recipe that
+worked: temporarily print `n`, `type`, `rows`, `cols` and the first
+differing element from the throw site, rebuild only that test target.
+
+### Quick bench recipe (Windows host, directional only)
+
+Same target as the diary tables: unsloth Qwen3.8-Flash-Next `UD-Q4_K_XL`
+shards + `MTP\mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf` sidecar, both under
+`%USERPROFILE%\.cache\huggingface\hub\models--unsloth--Qwen3.8-Flash-Next-GGUF\snapshots\<hash>\`.
+
+```
+gufo bench -m <shard-1-of-4> --speculative mtp --mtp-model <shared-Q8_0>
+           -p 2048 -n 16 -d 0,32768 -r 3
+```
+
+Run from `build\gpu-test` (DLLs are deployed there). Result of this pass vs
+the 2026-10-25 diary row (after #463): pp2048 d0 1612.87±14 vs 1627.12
+(neutral, within noise), pp2048 d32K 1404.50 vs 1487.96 (−5.6%, different
+session/thermals; re-run an A/B before believing it), tg16 d0 59.85 vs 28.32
+and d32K 77.05 vs 25.82 (large gain, attributable to the prompt-lookup
+default flip at `561c532e`, which postdates the diary row, not to this
+review's changes). Windows numbers stay directional per the rules above.
+
+### Windows host workflow gotchas
+
+- Test executables live in `build\gpu-test\tests\...`, three levels below
+  where `build.ps1` deploys the ROCm/vcpkg DLLs. Copy `build\gpu-test\*.dll`
+  (and the `hipblaslt`/`rocblas` subdirs) next to a test exe before running
+  it directly, or run through `ctest` with TheRock on `PATH`.
+- TheRock is not on the system PATH:
+  `$env:PATH = "C:\TheRock\build\bin;C:\TheRock\build\lib\llvm\bin;$env:PATH"`.
+- `python3` does not exist on this host; use `python` (3.13). Its Scripts
+  dir carries the `clang-format.exe` that `tools/ci/check-format.py` uses.
+- `gufo.exe diagnose` verifies the whole GPU stack before any bench.
+- `qwen38_flash_next_session_test` needs a local model artifact via argv
+  (argv[4] = MTP path) and is not ctest-registered; it is the only
+  automated-style coverage for `DecodeBatchImpl` changes.
+
