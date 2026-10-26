@@ -14,8 +14,9 @@ TheRock ROCm 10.0.0 / clang 23 toolchain used for the Windows build.
 
 - Upstream: <https://github.com/gufo-org/gufo>
 - Review clone: `%TEMP%\opencode\gufo-upstream` (bare clone works; fetch +
-  `git show <sha>`). Last swept upstream `aae1ac4` (2026-10-25) on 2026-10-25,
-  see "Sweep 2026-10-25"
+  `git show <sha>`). Last swept upstream `5eedd09` (2026-10-25) on 2026-10-25,
+  see "Sweep 2026-10-25" and the second pass inside "External repos survey
+  2026-10-25"
 - Local base: upstream `fee9d2a` (PR #314 fix)
 - Local Windows HEAD at review: `c85aada`
 - Local fork already has Windows-specific work in
@@ -1496,3 +1497,80 @@ The loader is already at the disk ceiling, so the 16.42 s Linux figure is
 page-cache residency (100+ GiB of it) rather than a reader implementation gap.
 Loading is closed as an I/O-capacity item: no kernel or platform port changes
 it on this host.
+
+## External repos survey 2026-10-25
+
+Surveyed for portable performance work: `kaelow/qwenllama.cpp`,
+`oRKLLM/llama.cpp-rockchip`, `ikawrakow/ik_llama.cpp`, `gufo-org/gufo`,
+`niko1221/strata`, `jesdga95/basalt`, `wallawalla47/infernix`,
+`haloforge-labs/bubo`. Survey clones under `%TEMP%\portscan` (throwaway;
+re-clone from those URLs). Local fork base at survey: `561c532e`.
+
+Upstream gufo second pass `aae1ac4..5eedd09` (10 commits): nothing to port.
+`2765d65` (#794) fills device-resident weights from the shard file on Linux —
+the Windows `UploadDeviceRegions` already does exactly this. `5eedd09` (#802)
+bundles the LLVM OpenMP runtime; `tools/windows/package.ps1` already ships
+`libomp140.x86_64.dll`. `43deb1e` (#778) is EmbeddingGemma, not in the fork.
+The rest is CI and functional tests. Next gufo sweep starts from `5eedd09`.
+
+### [ ] Strata V2K grouped decode experts (from bubo `296c8ef8`)
+
+`haloforge-labs/bubo` ("Halowin Bubo", another Windows gufo fork, ~265 commits
+over upstream at survey) ships the Strata (MIT) grouped-expert decode kernels
+already adapted to HIP/gfx1151 for this model: Q4_K gate/up over the 10 routed
+experts on narrow decode batches (up to 8 tokens, hidden 2560, ff 640), wave32
+x 8 waves, 4 rows per wave, LDS staging, Q8_1 activations, device expert IDs
+and caller-owned persistent scratch (82 KiB at 8 tokens).
+
+- Files: `mmq/expert_v2k.hip.cpp` (408 lines), `mmq/expert_v2k.hpp`,
+  `mmq/s26_tsum.hpp`, plus hunks in `kernels/rocm/executor.{cpp,hpp}` and
+  `mmq/qfn_mmq.h`. Opt-in env `GUFO_EXPERT_V2K=1`; bubo made it OFF by default
+  everywhere in `82dd8e25` and rejects it in exact.
+- Apply check against this fork (2026-10-25): all new files land clean; only
+  `executor.cpp` and `qfn_mmq.h` context hunks conflict (drift, not
+  structure), and the bubo-only `release_switches`/`release_profile_test`
+  halves must be dropped. Patch kept at `patches/strata-v2k-bubo-296c8ef8.patch`
+  (regenerate with `git -C <bubo clone> format-patch -1 296c8ef8 -o <out>`).
+- Gate: greedy haiku byte-identical with the switch off; then interleaved
+  `bench -p 2048 -n 128 -d 32768 -r 2` A/B with `GUFO_EXPERT_V2K=0/1`. Bubo
+  publishes no numbers, so treat the gain as unmeasured until this passes.
+
+### [ ] Strata hipBLASLt tuning tables for gfx1151
+
+`niko1221/strata` bakes per-shape hipBLASLt solution IDs
+(`src/prefill/hipblaslt_tuning.hpp`, `STRATA_HIPBLASLT_TUNING_V1`) and ships a
+measured gfx1151 table for Qwen3.8-Flash-Next under
+`bench/results/2026-10-05-community-gfx1151/gfx1151-*-tuningTables.json`.
+This fork's `qwen38_flash_next/kernels/rocm/blaslt.cpp` takes heuristic
+candidate 0 of 16. Port = pin known solution IDs when the arch family and
+hipBLASLt version match, validate with `matmulIsAlgoSupported`, fall back to
+the heuristic otherwise. Verify the table's hipBLASLt version against our
+TheRock build before expecting any win. Do not port their kernels directly;
+they are CUDA `.cu` (the V2K port above is the already-adapted path).
+
+### [ ] Bubo NPU prefill offload (big-ticket, deferred)
+
+`bubo src/npu/` (~30 files, adapted from the MIT fork `mikealanni/gufo`):
+offloads eligible Q8_0 projections in complete 4096-token prefill groups to
+XDNA2 through a persistent XRT context (BFP codec, pinned xclbin artifacts,
+`GUFO_NPU_*` environment). Only worth starting if prefill beyond ~1.6k tok/s
+is the goal; it is a subsystem needing XRT and real-hardware calibration, not
+a patch.
+
+### Already covered or not applicable
+
+- bubo `00c45dde` (fewer host round trips per MTP cycle): the fork has it
+  (`EnsureFrontier` in `qwen38_flash_next/engine.cpp`).
+- bubo sampling-perf commits (`fcc9d940`, `62d1ebe5`, `17eb747b`, `1d0d90cf`,
+  `53a419c5`, `66af5b89`): they optimize EOG/counterfactual paths in
+  `src/core/sampling.cpp` that only exist after bubo's behaviour port; this
+  fork has no EOG/counterfactual machinery, so they do not apply.
+- `kaelow/qwenllama.cpp`: tracks upstream llama.cpp (Metal/OpenCL/Snapdragon
+  churn), no AMD/gfx1151 custom work.
+- `oRKLLM/llama.cpp-rockchip`: RK3588 NPU llama.cpp backend; wrong hardware
+  and ggml architecture.
+- `ikawrakow/ik_llama.cpp`: CPU/TBLAS focus; our bottleneck is GPU decode.
+- `jesdga95/basalt`: NVIDIA Blackwell (sm_120) NVFP4 plus peer-GPU expert
+  tiering; unified memory makes that design moot here.
+- `wallawalla47/infernix`: RTX 5090 only (pinned-RAM experts over PCIe, NVMe
+  n-gram reads); same reasoning.

@@ -1,0 +1,910 @@
+From 296c8ef8b8b02bfa193f8f4dca619d55bd638feb Mon Sep 17 00:00:00 2001
+From: HaloForge Labs <340664083+haloforge-labs@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 17:42:52 -0400
+Subject: [PATCH] qwen38: grouped decode experts (Strata V2K) for Q4_K gate/up
+ on narrow decode batches
+
+On by default in the default and subagents profiles, off in exact and stock.
+Includes the Strata MIT notice and attribution headers.
+---
+ docs/FLAGS.md                                 |   1 +
+ src/cli/serve/release_switches.inc            |   3 +
+ src/cli/serve/release_switches.json           |  25 ++
+ src/models/qwen38_flash_next/CMakeLists.txt   |   3 +
+ .../kernels/rocm/executor.cpp                 |  35 ++
+ .../kernels/rocm/executor.hpp                 |   2 +
+ .../kernels/rocm/mmq/VENDOR.md                |  44 ++
+ .../kernels/rocm/mmq/expert_v2k.hip.cpp       | 408 ++++++++++++++++++
+ .../kernels/rocm/mmq/expert_v2k.hpp           |  57 +++
+ .../kernels/rocm/mmq/qfn_mmq.h                |  20 +
+ .../kernels/rocm/mmq/s26_tsum.hpp             |  98 +++++
+ tests/cli/release_profile_test.cpp            |   4 +-
+ tests/fixtures/release_flags_golden.md        |   1 +
+ 13 files changed, 700 insertions(+), 1 deletion(-)
+ create mode 100644 src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hip.cpp
+ create mode 100644 src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hpp
+ create mode 100644 src/models/qwen38_flash_next/kernels/rocm/mmq/s26_tsum.hpp
+
+diff --git a/docs/FLAGS.md b/docs/FLAGS.md
+index 74c2f9e5..336caf29 100644
+--- a/docs/FLAGS.md
++++ b/docs/FLAGS.md
+@@ -89,6 +89,7 @@ Empty environment values count as unset and produce a warning.
+ | `GUFO_EOG_DEFER_P` | Set the deferred stop probability. | 0.9 | Keep the default unless early end token deferral tests require a different probability. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_EOG_MIN_PROB` | Set the minimum EOG probability required to stop. | 0.2 | Keep the default unless end token probability tests require another minimum. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_EOG_MIN_PROB_EXACT` | Compute EOG probability over the full vocabulary. | Off | Keep it off unless end token decisions require full vocabulary probabilities. | any; generic; qwen3.8-flash-next |
++| `GUFO_EXPERT_V2K` | Run decode experts in the grouped expert kernel. | 1 (0 with profile exact or stock) | Keep it on unless a test requires the per-slot expert kernels. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_HOST` | Set the server address through the environment. | Unset | Leave it unset unless the server address must come from this environment variable. | any; generic; any |
+ | `GUFO_LENIENT` | Accept near miss MTP drafts inside thinking spans. | bounded with MTP; otherwise off | Keep bounded outside exact unless strict speculative acceptance is required. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_LENIENT_LAMBDA` | Set the lenient speculative acceptance bound. | 0.5 | Keep the default unless lenient acceptance tests require a different bound. | any; generic; qwen3.8-flash-next |
+diff --git a/src/cli/serve/release_switches.inc b/src/cli/serve/release_switches.inc
+index 10a2630e..2d65bbed 100644
+--- a/src/cli/serve/release_switches.inc
++++ b/src/cli/serve/release_switches.inc
+@@ -140,6 +140,7 @@ json::parse(R"switch({"name":"GUFO_EVAL_MODEL_REVISION","kind":"env","class":"IN
+ json::parse(R"switch({"name":"GUFO_EVAL_SERVER_COMMIT","kind":"env","class":"INTERNAL","model_family":"any","platform":"any","requires":[],"values":{"default":null,"subagents":null,"exact":null},"exact_off":false,"inject_with":null,"suppressed_by":[],"purpose":"Control eval server commit.","default_text":"Unset","hardware_scope":"generic","note":"unclassified","built_in":null,"value_rule":"text","aliases":[],"takes_value":true,"echo":false})switch"),
+ json::parse(R"switch({"name":"GUFO_EVAL_SERVER_CONFIG","kind":"env","class":"INTERNAL","model_family":"any","platform":"any","requires":[],"values":{"default":null,"subagents":null,"exact":null},"exact_off":false,"inject_with":null,"suppressed_by":[],"purpose":"Control eval server config.","default_text":"Unset","hardware_scope":"generic","note":"unclassified","built_in":null,"value_rule":"text","aliases":[],"takes_value":true,"echo":false})switch"),
+ json::parse(R"switch({"name":"GUFO_EVAL_SERVER_LABEL","kind":"env","class":"INTERNAL","model_family":"any","platform":"any","requires":[],"values":{"default":null,"subagents":null,"exact":null},"exact_off":false,"inject_with":null,"suppressed_by":[],"purpose":"Control eval server label.","default_text":"Unset","hardware_scope":"generic","note":"unclassified","built_in":null,"value_rule":"text","aliases":[],"takes_value":true,"echo":false})switch"),
++json::parse(R"switch({"name":"GUFO_EXPERT_V2K","kind":"env","class":"DEFAULT","model_family":"qwen3.8-flash-next","platform":"any","requires":[],"values":{"default":"1","subagents":"1","exact":"0"},"exact_off":true,"inject_with":null,"suppressed_by":[],"purpose":"Run decode experts in the grouped expert kernel.","default_text":"1 (0 with profile exact or stock)","hardware_scope":"strix-halo-tuned","note":"Keep it on unless a test requires the per-slot expert kernels.","built_in":"0","value_rule":"bool","aliases":[],"takes_value":true,"echo":true})switch"),
+ json::parse(R"switch({"name":"GUFO_FFMPEG","kind":"env","class":"OTHER_MODEL","model_family":"minimax-h3","platform":"any","requires":[],"values":{"default":null,"subagents":null,"exact":null},"exact_off":false,"inject_with":null,"suppressed_by":[],"purpose":"Control ffmpeg.","default_text":"-","hardware_scope":"generic","note":"Use this switch with its model family.","built_in":null,"value_rule":"text","aliases":[],"takes_value":true,"echo":false})switch"),
+ json::parse(R"switch({"name":"GUFO_FFPROBE","kind":"env","class":"OTHER_MODEL","model_family":"minimax-h3","platform":"any","requires":[],"values":{"default":null,"subagents":null,"exact":null},"exact_off":false,"inject_with":null,"suppressed_by":[],"purpose":"Control ffprobe.","default_text":"-","hardware_scope":"generic","note":"Use this switch with its model family.","built_in":null,"value_rule":"text","aliases":[],"takes_value":true,"echo":false})switch"),
+ json::parse(R"switch({"name":"GUFO_GROUPED_DOWN","kind":"env","class":"REMOVED","model_family":"qwen3.8-flash-next","platform":"any","requires":[],"values":{"default":null,"subagents":null,"exact":null},"exact_off":false,"inject_with":null,"suppressed_by":[],"purpose":"Control grouped down.","default_text":"Removed","hardware_scope":"generic","note":"This experiment has no source reader.","built_in":null,"value_rule":"text","aliases":[],"takes_value":true,"echo":false})switch"),
+@@ -271,6 +272,7 @@ environment["GUFO_EVAL_MODEL_REVISION"] = CopyEnvironmentValue(std::getenv("GUFO
+ environment["GUFO_EVAL_SERVER_COMMIT"] = CopyEnvironmentValue(std::getenv("GUFO_EVAL_SERVER_COMMIT"));
+ environment["GUFO_EVAL_SERVER_CONFIG"] = CopyEnvironmentValue(std::getenv("GUFO_EVAL_SERVER_CONFIG"));
+ environment["GUFO_EVAL_SERVER_LABEL"] = CopyEnvironmentValue(std::getenv("GUFO_EVAL_SERVER_LABEL"));
++environment["GUFO_EXPERT_V2K"] = CopyEnvironmentValue(std::getenv("GUFO_EXPERT_V2K"));
+ environment["GUFO_FFMPEG"] = CopyEnvironmentValue(std::getenv("GUFO_FFMPEG"));
+ environment["GUFO_FFPROBE"] = CopyEnvironmentValue(std::getenv("GUFO_FFPROBE"));
+ environment["GUFO_HIPBLASLT_PLAN_CACHE"] = CopyEnvironmentValue(std::getenv("GUFO_HIPBLASLT_PLAN_CACHE"));
+@@ -361,6 +363,7 @@ environment["XDG_CACHE_HOME"] = CopyEnvironmentValue(std::getenv("XDG_CACHE_HOME
+ "GUFO_EOG_DEFER_P",
+ "GUFO_EOG_MIN_PROB",
+ "GUFO_EOG_MIN_PROB_EXACT",
++"GUFO_EXPERT_V2K",
+ "GUFO_HOST",
+ "GUFO_IQ4_WIDE_VARIANT",
+ "GUFO_IQ4_WMMA_WAVES",
+diff --git a/src/cli/serve/release_switches.json b/src/cli/serve/release_switches.json
+index 193b02dd..efce3f80 100644
+--- a/src/cli/serve/release_switches.json
++++ b/src/cli/serve/release_switches.json
+@@ -3567,6 +3567,31 @@
+       "takes_value": true,
+       "echo": false
+     },
++    {
++      "name": "GUFO_EXPERT_V2K",
++      "kind": "env",
++      "class": "DEFAULT",
++      "model_family": "qwen3.8-flash-next",
++      "platform": "any",
++      "requires": [],
++      "values": {
++        "default": "1",
++        "subagents": "1",
++        "exact": "0"
++      },
++      "exact_off": true,
++      "inject_with": null,
++      "suppressed_by": [],
++      "purpose": "Run decode experts in the grouped expert kernel.",
++      "default_text": "1 (0 with profile exact or stock)",
++      "hardware_scope": "strix-halo-tuned",
++      "note": "Keep it on unless a test requires the per-slot expert kernels.",
++      "built_in": "0",
++      "value_rule": "bool",
++      "aliases": [],
++      "takes_value": true,
++      "echo": true
++    },
+     {
+       "name": "GUFO_FFMPEG",
+       "kind": "env",
+diff --git a/src/models/qwen38_flash_next/CMakeLists.txt b/src/models/qwen38_flash_next/CMakeLists.txt
+index 05d50c51..099b3754 100644
+--- a/src/models/qwen38_flash_next/CMakeLists.txt
++++ b/src/models/qwen38_flash_next/CMakeLists.txt
+@@ -29,11 +29,14 @@ if (ENGINE_ENABLE_HIP)
+     ${QFN_MMQ_DIR}/qfn_mmq.hip.cpp
+     ${QFN_MMQ_DIR}/mmid.hip.cpp
+     ${QFN_MMQ_DIR}/mmvq.hip.cpp
++    ${QFN_MMQ_DIR}/expert_v2k.hip.cpp
+     ${QFN_MMQ_DIR}/moe_wave64.hip.cpp
+     ${QFN_MMQ_DIR}/quantize.hip.cpp)
+ 
+   add_library(gufo_qwen38_flash_next_mmq STATIC ${QFN_MMQ_SOURCES})
+   set_source_files_properties(${QFN_MMQ_SOURCES} PROPERTIES LANGUAGE HIP)
++  set_source_files_properties(${QFN_MMQ_DIR}/expert_v2k.hip.cpp
++    PROPERTIES COMPILE_OPTIONS "-mno-wavefrontsize64")
+   set_source_files_properties(${QFN_MMQ_DIR}/moe_wave64.hip.cpp
+     PROPERTIES COMPILE_OPTIONS "-mwavefrontsize64")
+   set_target_properties(gufo_qwen38_flash_next_mmq PROPERTIES
+diff --git a/src/models/qwen38_flash_next/kernels/rocm/executor.cpp b/src/models/qwen38_flash_next/kernels/rocm/executor.cpp
+index 15e6a9de..6e884a26 100644
+--- a/src/models/qwen38_flash_next/kernels/rocm/executor.cpp
++++ b/src/models/qwen38_flash_next/kernels/rocm/executor.cpp
+@@ -83,6 +83,14 @@ struct BenchEvents {
+ };
+ struct NoBenchEvents {};
+ 
++bool ExpertV2kEnabled() {
++  static const bool enabled = [] {
++    const char* value = std::getenv("GUFO_EXPERT_V2K");
++    return value != nullptr && std::strcmp(value, "1") == 0;
++  }();
++  return enabled;
++}
++
+ bool RoutedLanerowEnabled() {
+   static const bool enabled = [] {
+     const char* value = std::getenv("GUFO_ROUTED_LANEROW");
+@@ -1081,6 +1089,7 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
+   e->model_ = &model;
+   e->ngram_ = ngram;
+   e->options_ = options;
++  e->expert_v2k_ = ExpertV2kEnabled();
+   e->options_.max_batch = std::max<std::uint32_t>(1, options.max_batch);
+   e->options_.max_logit_rows = std::clamp<std::uint32_t>(
+       options.max_logit_rows, 1, e->options_.max_batch);
+@@ -1261,6 +1270,11 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
+   s.gate_e = take(slots * c.expert_ff);
+   s.up_e = take(slots * c.expert_ff);
+   s.down_e = take(slots * hidden);
++  s.expert_v2k = e->expert_v2k_
++                     ? Alloc<std::uint8_t>(
++                           a, qfn_mmq_expert_v2k_scratch_bytes(kVecBatch),
++                           error_msg)
++                     : nullptr;
+   s.shexp_gate = f32(T * c.shared_expert_ff);
+   s.shexp_up = f32(T * c.shared_expert_ff);
+   s.shexp_out = f32(T * hidden);
+@@ -3197,6 +3211,27 @@ bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
+       AssignError(error_msg, "routed F16 down GEMM failed");
+       return false;
+     }
++  } else if (expert_v2k_ && !prefill_phase && n_tokens >= 2 &&
++             n_tokens <= kVecBatch && used == 10 && c.hidden_size == 2560 &&
++             c.expert_ff == 640 && c.num_experts == 512 &&
++             l.ffn_gate_exps.type == GgmlType::kQ4_K &&
++             l.ffn_up_exps.type == GgmlType::kQ4_K &&
++             l.ffn_gate_exps.cols == 2560 && l.ffn_gate_exps.rows == 640 &&
++             l.ffn_gate_exps.experts == 512 && l.ffn_up_exps.cols == 2560 &&
++             l.ffn_up_exps.rows == 640 && l.ffn_up_exps.experts == 512 &&
++             l.ffn_down_exps.cols == 640 && l.ffn_down_exps.rows == 2560 &&
++             l.ffn_down_exps.experts == 512 &&
++             (l.ffn_down_exps.type == GgmlType::kQ5_1 ||
++              l.ffn_down_exps.type == GgmlType::kQ8_0)) {
++    if (qfn_mmq_expert_v2k(
++            static_cast<int>(l.ffn_gate_exps.type),
++            static_cast<int>(l.ffn_down_exps.type), l.ffn_gate_exps.data,
++            l.ffn_up_exps.data, l.ffn_down_exps.data, x, s_.ids, s_.gate_e,
++            s_.up_e, s_.down_e, static_cast<int>(n_tokens), s_.expert_v2k,
++            qfn_mmq_expert_v2k_scratch_bytes(kVecBatch), stream_) != 0) {
++      AssignError(error_msg, "grouped expert V2K projection failed");
++      return false;
++    }
+   } else {
+     if (!GatedExperts(l.ffn_gate_exps, l.ffn_up_exps, x, s_.ids, s_.gate_e,
+                       n_tokens, used, error_msg)) {
+diff --git a/src/models/qwen38_flash_next/kernels/rocm/executor.hpp b/src/models/qwen38_flash_next/kernels/rocm/executor.hpp
+index 347f60dd..5259892b 100644
+--- a/src/models/qwen38_flash_next/kernels/rocm/executor.hpp
++++ b/src/models/qwen38_flash_next/kernels/rocm/executor.hpp
+@@ -669,6 +669,7 @@ private:
+   /// Back to the primary stream, after draining the current one if needed.
+   [[nodiscard]] bool UsePrimaryStream(std::string* error_msg) const;
+   hipEvent_t counts_ready_{nullptr};
++  bool expert_v2k_{false};  ///< startup-cached opt-in decode expert chain
+   hipblasHandle_t blas_{nullptr};
+   std::unique_ptr<BlasLt> blaslt_;
+ 
+@@ -738,6 +739,7 @@ private:
+     float* gate_e;
+     float* up_e;
+     float* down_e;
++    void* expert_v2k;  ///< persistent plan/xq/hq, retained at base in row views
+     float* shexp_gate;
+     float* shexp_up;
+     float* shexp_out;
+diff --git a/src/models/qwen38_flash_next/kernels/rocm/mmq/VENDOR.md b/src/models/qwen38_flash_next/kernels/rocm/mmq/VENDOR.md
+index 53910365..abede539 100644
+--- a/src/models/qwen38_flash_next/kernels/rocm/mmq/VENDOR.md
++++ b/src/models/qwen38_flash_next/kernels/rocm/mmq/VENDOR.md
+@@ -21,3 +21,47 @@ under `tests/models/qwen38_flash_next/` plus the AR/MTP session replay.
+ The routed GEMM test compares supported formats against a floating-point
+ reference and checks the paired adapter against two separate projections.
+ Build and validate through Nix as described in `AGENTS.md`.
++
++## Strata grouped decode experts
++
++Adapted from https://github.com/Niko1221/Strata (MIT).
++Introduction: `04e1e11afb45c040960e90c834e0fe85a475a4ab`.
++Measured base (PR #1360): `82f46a8`.
++Read-only reference HEAD: `a0116b2782a5b82622358c04a06496485d12b2d6`.
++
++Imported structure: `src/kernels/cuda/iq_kernels.cu` (`S27`,
++`s27_gu_kernel`, `s26_swiglu_q8_1_kernel`, `s27_down_kernel`),
++`src/kernels/cuda/verify_kernels.cu` (`resident_plan_par_kernel`), and
++`src/kernels/cuda/s26_tsum.cuh` (transposed butterfly helpers).
++Local files: `expert_v2k.hip.cpp`, `s26_tsum.hpp`.
++
++Modifications: HIP-only includes/namespace, separate gate/up/down tensor
++bases, device expert IDs instead of blob pointers, gufo's Q4MoeFragment
++and Q5_1/Q8_0 vec_dot arithmetic, gufo's SwiGLU/quantizer rules,
++negative-ID zeroing, caller-owned persistent scratch, and hq-only bridge.
++Only Q4_K gate/up is instantiated; Q5_K retains the existing path.
++The measured four-entry chunks, eight wave32 waves, four rows per wave,
++LDS staging and TSUM layout are retained.
++
++Full upstream license follows verbatim:
++MIT License
++
++Copyright (c) 2026 Niko1221 and the Strata contributors
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hip.cpp b/src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hip.cpp
+new file mode 100644
+index 00000000..dce27a92
+--- /dev/null
++++ b/src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hip.cpp
+@@ -0,0 +1,408 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Niko1221 and the Strata contributors
++// Adapted from https://github.com/Niko1221/Strata
++// V2K/S26/S27: src/kernels/cuda/iq_kernels.cu, measured base 82f46a8
++// (introduced by 04e1e11afb45c040960e90c834e0fe85a475a4ab).
++// Group planning: src/kernels/cuda/verify_kernels.cu.
++// Gufo adaptation: separate tensor bases and gufo vec_dot arithmetic.
++// Full MIT permission and warranty notice: VENDOR.md in this directory.
++#include "expert_v2k.hpp"
++
++#include "qfn_mmq.h"
++#include "qfn_mmq_prelude.h"
++#include "s26_tsum.hpp"
++
++namespace qfn_mmq {
++#include "vecdotq.hpp"
++namespace v2k {
++
++static_assert(sizeof(block_q8_1) == kQ8BlockBytes);
++constexpr int kChunk = 4;
++constexpr int kRows = 4;
++constexpr int kWaves = 8;
++
++struct Plan {
++  int32_t *expert, *start, *count, *token, *destination;
++  block_q8_1 *xq, *hq;
++  Plan(void* scratch, int tokens) {
++    const Layout l(tokens);
++    auto* p = static_cast<char*>(scratch);
++    expert = reinterpret_cast<int32_t*>(p + l.expert);
++    start = reinterpret_cast<int32_t*>(p + l.start);
++    count = reinterpret_cast<int32_t*>(p + l.count);
++    token = reinterpret_cast<int32_t*>(p + l.token);
++    destination = reinterpret_cast<int32_t*>(p + l.destination);
++    xq = reinterpret_cast<block_q8_1*>(p + l.xq);
++    hq = reinterpret_cast<block_q8_1*>(p + l.hq);
++  }
++};
++
++// Measured-base resident_plan_par_kernel's first/rank/size prefix plan.
++// All entries, including negative ids, receive a compact entry/destination.
++__global__ void expert_v2k_group_kernel(const int32_t* __restrict__ ids,
++                                        int entries, int32_t* expert,
++                                        int32_t* start, int32_t* count,
++                                        int32_t* token, int32_t* destination) {
++  __shared__ int s_id[128], s_first[128], s_size[128];
++  const int i = threadIdx.x;
++  int id = -1;
++  if (i < entries) {
++    id = ids[i] < 0 ? -1 : ids[i];
++    s_id[i] = id;
++  }
++  __syncthreads();
++  int first = i, rank = 0, size = 0;
++  if (i < entries) {
++    for (int j = 0; j < entries; ++j) {
++      const bool same = s_id[j] == id;
++      if (same && j < first)
++        first = j;
++      if (same && j < i)
++        ++rank;
++      size += same;
++    }
++    s_first[i] = first;
++    s_size[i] = size;
++  }
++  __syncthreads();
++  if (i < entries) {
++    int group = 0, begin = 0;
++    for (int j = 0; j < first; ++j) {
++      if (s_first[j] == j) {
++        ++group;
++        begin += s_size[j];
++      }
++    }
++    if (i == first) {
++      expert[group] = id;
++      start[group] = begin;
++    }
++    destination[begin + rank] = i;
++    token[begin + rank] = i / kUsed;
++    if (i == 0) {
++      int groups = 0;
++      for (int j = 0; j < entries; ++j)
++        groups += s_first[j] == j;
++      start[groups] = entries;
++      *count = groups;
++    }
++  }
++}
++
++template<ggml_type Type>
++struct Fragment;
++template<>
++struct Fragment<GGML_TYPE_Q4_K> {
++  using W = Q4MoeFragment;
++  static constexpr int qk = QK_K, ipb = QI4_K / 2, step = 2;
++  __device__ static W Load(const void* row, int block, int iqs) {
++    return W(row, block, iqs);
++  }
++  __device__ static float Apply(const W& w, const block_q8_1* x, int iqs) {
++    return w.Dot(x, iqs);
++  }
++};
++template<>
++struct Fragment<GGML_TYPE_Q5_1> {
++  struct W {
++    int vl[2], vh[2];
++    half2 dm;
++  };
++  static constexpr int qk = QK5_1, ipb = QI5_1 / 2, step = 2;
++  __device__ static W Load(const void* row, int block, int iqs) {
++    const auto* b = static_cast<const block_q5_1*>(row) + block;
++    W w;
++#pragma unroll
++    for (int i = 0; i < 2; ++i) {
++      w.vl[i] = get_int_b4(b->qs, iqs + i);
++      w.vh[i] = get_int_b4(b->qh, 0) >> (4 * (iqs + i));
++    }
++    w.dm = b->dm;
++    return w;
++  }
++  __device__ static float Apply(const W& w, const block_q8_1* x, int iqs) {
++    int u[4];
++#pragma unroll
++    for (int i = 0; i < 2; ++i) {
++      u[2 * i] = get_int_b4(x->qs, iqs + i);
++      u[2 * i + 1] = get_int_b4(x->qs, iqs + i + QI5_1);
++    }
++    return vec_dot_q5_1_q8_1_impl<2>(w.vl, w.vh, u, w.dm, x->ds);
++  }
++};
++template<>
++struct Fragment<GGML_TYPE_Q8_0> {
++  struct W {
++    int v[2];
++    float d;
++  };
++  static constexpr int qk = QK8_0, ipb = QI8_0 / 2, step = 2;
++  __device__ static W Load(const void* row, int block, int iqs) {
++    const auto* b = static_cast<const block_q8_0*>(row) + block;
++    W w;
++#pragma unroll
++    for (int i = 0; i < 2; ++i)
++      w.v[i] = get_int_b2(b->qs, iqs + i);
++    w.d = __half2float(b->d);
++    return w;
++  }
++  __device__ static float Apply(const W& w, const block_q8_1* x, int iqs) {
++    int u[2];
++#pragma unroll
++    for (int i = 0; i < 2; ++i)
++      u[i] = get_int_b4(x->qs, iqs + i);
++    const float d = __low2float(x->ds);
++    return vec_dot_q8_0_q8_1_impl<float, 2>(w.v, u, w.d, d);
++  }
++};
++
++template<ggml_type TG>
++__global__ void __launch_bounds__(256)
++    expert_v2k_gu_kernel(const void* __restrict__ gate_w,
++                         const void* __restrict__ up_w,
++                         const int32_t* __restrict__ expert,
++                         const int32_t* __restrict__ start,
++                         const int32_t* __restrict__ count,
++                         const int32_t* __restrict__ token,
++                         const block_q8_1* __restrict__ xq,
++                         float* __restrict__ gate, float* __restrict__ up) {
++  using F = Fragment<TG>;
++  __shared__ block_q8_1 s_x[kChunk * 80];
++  const int g = blockIdx.y;
++  if (g >= *count)
++    return;  // Uniform before the chunk's LDS barriers.
++  const int wave = threadIdx.x >> 5, lane = threadIdx.x & 31;
++  const int row0 = blockIdx.x * kWaves * kRows + wave;
++  const int e0 = start[g], e1 = start[g + 1], id = expert[g];
++  const bool is_up = row0 >= kFf;
++  const int rr = is_up ? row0 - kFf : row0;
++  if (id < 0) {
++    for (int e = e0; e < e1; ++e)
++#pragma unroll
++      for (int q = 0; q < kRows; ++q)
++        if (lane == 0)
++          (is_up ? up : gate)[std::size_t(e) * kFf + rr + 8 * q] = 0.0f;
++    return;
++  }
++  constexpr std::size_t row_bytes = (kHidden / QK_K) * sizeof(block_q4_K);
++  const auto* base = static_cast<const char*>(is_up ? up_w : gate_w) +
++                     std::size_t(id) * kFf * row_bytes;
++  const void* wr[kRows];
++#pragma unroll
++  for (int q = 0; q < kRows; ++q)
++    wr[q] = base + std::size_t(rr + 8 * q) * row_bytes;
++  for (int e = e0; e < e1; e += kChunk) {
++    const int n = min(kChunk, e1 - e);
++    __syncthreads();
++    for (int i = threadIdx.x; i < n * 80; i += 256) {
++      const int c = i / 80, j = i % 80;
++      memcpy(&s_x[i], &xq[std::size_t(token[e + c]) * 80 + j],
++             sizeof(block_q8_1));
++    }
++    __syncthreads();
++    float sums[kRows][kChunk] = {};
++    for (int k = lane; k < (kHidden / F::qk) * F::ipb; k += 32) {
++      const int kb = k / F::ipb, iqs = F::step * (k % F::ipb);
++      const typename F::W w[kRows] = {
++          F::Load(wr[0], kb, iqs), F::Load(wr[1], kb, iqs),
++          F::Load(wr[2], kb, iqs), F::Load(wr[3], kb, iqs)};
++#pragma unroll
++      for (int q = 0; q < kRows; ++q)
++#pragma unroll
++        for (int c = 0; c < kChunk; ++c)
++          if (c < n)
++            sums[q][c] += F::Apply(w[q], s_x + c * 80 + kb * (F::qk / 32), iqs);
++    }
++    float v[16];
++#pragma unroll
++    for (int j = 0; j < 16; ++j)
++      v[j] = sums[j / kChunk][j % kChunk];
++    const float sum = s26ts::tsum<16>(v, lane);
++    const int j = s26ts::tsum_token<16>(lane), c = j % kChunk;
++    if (lane == s26ts::tsum_lane<16>(j) && c < n) {
++      const int q = j / kChunk;
++      (is_up ? up : gate)[std::size_t(e + c) * kFf + rr + 8 * q] =
++          isfinite(sum) ? sum : 0.0f;
++    }
++  }
++}
++
++__global__ void expert_v2k_swiglu_q8_1_kernel(const float* __restrict__ gate,
++                                              const float* __restrict__ up,
++                                              block_q8_1* __restrict__ hq,
++                                              int values) {
++#pragma clang fp contract(off)
++  const int i = blockIdx.x * blockDim.x + threadIdx.x;
++  if (i >= values)
++    return;  // Complete 32-value quantization waves.
++  const float g = gate[i];
++  const float xi = (g * (1.0f / (1.0f + __expf(-g)))) * up[i];
++  float amax = fabsf(xi), sum = xi;
++#pragma unroll
++  for (int offset = 16; offset > 0; offset >>= 1) {
++    amax = fmaxf(amax, __shfl_xor(amax, offset, 32));
++    sum += __shfl_xor(sum, offset, 32);
++  }
++  const float d = amax / 127.0f;
++  hq[i / 32].qs[i % 32] = amax == 0.0f ? 0 : roundf(xi / d);
++  if (i % 32 == 0)
++    hq[i / 32].ds = make_half2(d, sum);
++}
++
++template<ggml_type TD>
++__global__ void __launch_bounds__(256)
++    expert_v2k_down_kernel(const void* __restrict__ weights,
++                           const int32_t* __restrict__ expert,
++                           const int32_t* __restrict__ start,
++                           const int32_t* __restrict__ count,
++                           const int32_t* __restrict__ destination,
++                           const block_q8_1* __restrict__ hq,
++                           float* __restrict__ out) {
++  using F = Fragment<TD>;
++  __shared__ block_q8_1 s_h[kChunk * 20];
++  const int g = blockIdx.y;
++  if (g >= *count)
++    return;
++  const int wave = threadIdx.x >> 5, lane = threadIdx.x & 31;
++  const int r0 = blockIdx.x * kWaves * kRows + wave;
++  const int e0 = start[g], e1 = start[g + 1], id = expert[g];
++  if (id < 0) {
++    for (int e = e0; e < e1; ++e)
++#pragma unroll
++      for (int q = 0; q < kRows; ++q)
++        if (lane == 0)
++          out[std::size_t(destination[e]) * kHidden + r0 + 8 * q] = 0.0f;
++    return;
++  }
++  constexpr std::size_t block_bytes =
++      TD == GGML_TYPE_Q5_1 ? sizeof(block_q5_1) : sizeof(block_q8_0);
++  constexpr std::size_t row_bytes = (kFf / F::qk) * block_bytes;
++  const auto* base =
++      static_cast<const char*>(weights) + std::size_t(id) * kHidden * row_bytes;
++  const void* wr[kRows];
++#pragma unroll
++  for (int q = 0; q < kRows; ++q)
++    wr[q] = base + std::size_t(r0 + 8 * q) * row_bytes;
++  for (int e = e0; e < e1; e += kChunk) {
++    const int n = min(kChunk, e1 - e);
++    __syncthreads();
++    for (int i = threadIdx.x; i < n * 20; i += 256) {
++      const int c = i / 20, j = i % 20;
++      memcpy(&s_h[i], &hq[std::size_t(e + c) * 20 + j], sizeof(block_q8_1));
++    }
++    __syncthreads();
++    float sums[kRows][kChunk] = {};
++    for (int k = lane; k < (kFf / F::qk) * F::ipb; k += 32) {
++      const int kb = k / F::ipb, iqs = F::step * (k % F::ipb);
++      const typename F::W w[kRows] = {
++          F::Load(wr[0], kb, iqs), F::Load(wr[1], kb, iqs),
++          F::Load(wr[2], kb, iqs), F::Load(wr[3], kb, iqs)};
++#pragma unroll
++      for (int q = 0; q < kRows; ++q)
++#pragma unroll
++        for (int c = 0; c < kChunk; ++c)
++          if (c < n)
++            sums[q][c] += F::Apply(w[q], s_h + c * 20 + kb, iqs);
++    }
++    float v[16];
++#pragma unroll
++    for (int j = 0; j < 16; ++j)
++      v[j] = sums[j / kChunk][j % kChunk];
++    const float sum = s26ts::tsum<16>(v, lane);
++    const int j = s26ts::tsum_token<16>(lane), c = j % kChunk;
++    if (lane == s26ts::tsum_lane<16>(j) && c < n)
++      out[std::size_t(destination[e + c]) * kHidden + r0 + 8 * (j / kChunk)] =
++          isfinite(sum) ? sum : 0.0f;
++  }
++}
++
++bool ValidScratch(int tokens, const void* scratch, std::size_t bytes) {
++  return tokens >= 2 && tokens <= kMaxTokens && scratch &&
++         bytes >= Layout(tokens).bytes;
++}
++}  // namespace v2k
++}  // namespace qfn_mmq
++
++extern "C" size_t qfn_mmq_expert_v2k_scratch_bytes(int max_tokens) {
++  return max_tokens >= 2 && max_tokens <= qfn_mmq::v2k::kMaxTokens
++             ? qfn_mmq::v2k::Layout(max_tokens).bytes
++             : 0;
++}
++
++extern "C" int qfn_mmq_expert_v2k_gu(const void* gate_w, const void* up_w,
++                                     const float* x, const int32_t* ids,
++                                     float* gate, float* up, int n_tokens,
++                                     void* scratch, size_t bytes,
++                                     hipStream_t stream) {
++  using namespace qfn_mmq;
++  if (!gate_w || !up_w || !x || !ids || !gate || !up ||
++      !v2k::ValidScratch(n_tokens, scratch, bytes))
++    return -1;
++  const v2k::Plan p(scratch, n_tokens);
++  const int rc = qfn_mmq_quantize_q8_1(x, p.xq, n_tokens, v2k::kHidden, stream);
++  if (rc != 0)
++    return rc;
++  v2k::expert_v2k_group_kernel<<<1, 128, 0, stream>>>(
++      ids, n_tokens * v2k::kUsed, p.expert, p.start, p.count, p.token,
++      p.destination);
++  if (hipGetLastError() != hipSuccess)
++    return -2;
++  v2k::expert_v2k_gu_kernel<GGML_TYPE_Q4_K>
++      <<<dim3(40, n_tokens * v2k::kUsed), 256, 0, stream>>>(
++          gate_w, up_w, p.expert, p.start, p.count, p.token, p.xq, gate, up);
++  return hipGetLastError() == hipSuccess ? 0 : -2;
++}
++
++extern "C" int qfn_mmq_expert_v2k_bridge(const float* gate, const float* up,
++                                         void* hq, int entries,
++                                         hipStream_t stream) {
++  using namespace qfn_mmq;
++  if (!gate || !up || !hq || entries < 1 ||
++      entries > v2k::kMaxTokens * v2k::kUsed)
++    return -1;
++  const int values = entries * v2k::kFf;
++  v2k::expert_v2k_swiglu_q8_1_kernel<<<(values + 255) / 256, 256, 0, stream>>>(
++      gate, up, static_cast<block_q8_1*>(hq), values);
++  return hipGetLastError() == hipSuccess ? 0 : -2;
++}
++
++extern "C" int qfn_mmq_expert_v2k_down(int down_type, const void* weights,
++                                       float* out, int n_tokens, void* scratch,
++                                       size_t bytes, hipStream_t stream) {
++  using namespace qfn_mmq;
++  if (!weights || !out || !v2k::ValidScratch(n_tokens, scratch, bytes) ||
++      (down_type != GGML_TYPE_Q5_1 && down_type != GGML_TYPE_Q8_0))
++    return -1;
++  const v2k::Plan p(scratch, n_tokens);
++  const dim3 grid(80, n_tokens * v2k::kUsed);
++  if (down_type == GGML_TYPE_Q5_1)
++    v2k::expert_v2k_down_kernel<GGML_TYPE_Q5_1><<<grid, 256, 0, stream>>>(
++        weights, p.expert, p.start, p.count, p.destination, p.hq, out);
++  else
++    v2k::expert_v2k_down_kernel<GGML_TYPE_Q8_0><<<grid, 256, 0, stream>>>(
++        weights, p.expert, p.start, p.count, p.destination, p.hq, out);
++  return hipGetLastError() == hipSuccess ? 0 : -2;
++}
++
++extern "C" int qfn_mmq_expert_v2k(int gu_type, int down_type,
++                                  const void* gate_w, const void* up_w,
++                                  const void* down_w, const float* x,
++                                  const int32_t* ids, float* gate, float* up,
++                                  float* out, int n_tokens, void* scratch,
++                                  size_t bytes, hipStream_t stream) {
++  using namespace qfn_mmq;
++  if (gu_type != GGML_TYPE_Q4_K ||
++      (down_type != GGML_TYPE_Q5_1 && down_type != GGML_TYPE_Q8_0) || !down_w ||
++      !out)
++    return -1;
++  int rc = qfn_mmq_expert_v2k_gu(gate_w, up_w, x, ids, gate, up, n_tokens,
++                                 scratch, bytes, stream);
++  if (rc != 0)
++    return rc;
++  const v2k::Plan p(scratch, n_tokens);
++  rc = qfn_mmq_expert_v2k_bridge(gate, up, p.hq, n_tokens * v2k::kUsed, stream);
++  if (rc != 0)
++    return rc;
++  return qfn_mmq_expert_v2k_down(down_type, down_w, out, n_tokens, scratch,
++                                 bytes, stream);
++}
+diff --git a/src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hpp b/src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hpp
+new file mode 100644
+index 00000000..a200ec67
+--- /dev/null
++++ b/src/models/qwen38_flash_next/kernels/rocm/mmq/expert_v2k.hpp
+@@ -0,0 +1,57 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++
++namespace qfn_mmq::v2k {
++constexpr int kHidden = 2560;
++constexpr int kFf = 640;
++constexpr int kUsed = 10;
++constexpr int kMaxTokens = 8;
++constexpr std::size_t kQ8BlockBytes = 36;
++constexpr std::size_t Align(std::size_t bytes) {
++  return (bytes + 255) & ~std::size_t{255};
++}
++
++// Byte offsets in caller-owned, HIP-aligned scratch. Gate/up use the
++// executor's existing float buffers; no float h image is allocated.
++struct Layout {
++  std::size_t xq, hq, expert, start, count, token, destination, bytes;
++  constexpr explicit Layout(int tokens)
++      : xq(0),
++        hq(Align(std::size_t(tokens) * (kHidden / 32) * kQ8BlockBytes)),
++        expert(Align(hq +
++                     std::size_t(tokens) * kUsed * (kFf / 32) * kQ8BlockBytes)),
++        start(expert + std::size_t(tokens) * kUsed * sizeof(std::int32_t)),
++        count(start + (std::size_t(tokens) * kUsed + 1) * sizeof(std::int32_t)),
++        token(count + sizeof(std::int32_t)),
++        destination(token + std::size_t(tokens) * kUsed * sizeof(std::int32_t)),
++        bytes(Align(destination +
++                    std::size_t(tokens) * kUsed * sizeof(std::int32_t))) {}
++};
++
++constexpr bool ValidLayouts() {
++  for (int n = 2; n <= kMaxTokens; ++n) {
++    const Layout l(n);
++    if (l.hq < std::size_t(n) * 80 * kQ8BlockBytes ||
++        l.expert < l.hq + std::size_t(n) * 10 * 20 * kQ8BlockBytes ||
++        l.start < l.expert + std::size_t(n) * 10 * 4 ||
++        l.count < l.start + (std::size_t(n) * 10 + 1) * 4 ||
++        l.token < l.count + 4 ||
++        l.destination < l.token + std::size_t(n) * 10 * 4 ||
++        l.bytes < l.destination + std::size_t(n) * 10 * 4 || l.hq % 256 ||
++        l.expert % 256 || l.bytes % 256)
++      return false;
++  }
++  return true;
++}
++static_assert(ValidLayouts(), "V2K scratch regions must not overlap");
++static_assert(Layout(8).hq == 23040);
++static_assert(Layout(8).expert - Layout(8).hq == 57600);
++static_assert(Layout(8).bytes == 82176);
++static_assert(std::size_t(80) * kFf * sizeof(float) == 204800);
++static_assert(std::size_t(80) * kHidden * sizeof(float) == 819200);
++static_assert(4 * 80 * kQ8BlockBytes == 11520);
++static_assert(4 * 20 * kQ8BlockBytes == 2880);
++}  // namespace qfn_mmq::v2k
+diff --git a/src/models/qwen38_flash_next/kernels/rocm/mmq/qfn_mmq.h b/src/models/qwen38_flash_next/kernels/rocm/mmq/qfn_mmq.h
+index 3546700a..6c52ad20 100644
+--- a/src/models/qwen38_flash_next/kernels/rocm/mmq/qfn_mmq.h
++++ b/src/models/qwen38_flash_next/kernels/rocm/mmq/qfn_mmq.h
+@@ -44,6 +44,26 @@ int qfn_mmq_moe_gated_vec(int weight_type, const void* gate, const void* up,
+                           int k, int tokens, int experts, int experts_used,
+                           hipStream_t stream);
+ 
++// Fixed 2560/640, top-10, 512-expert decode chain. Q4_K gate/up and
++// Q5_1/Q8_0 down, N=2..8. Caller scratch persists across graph replay.
++size_t qfn_mmq_expert_v2k_scratch_bytes(int max_tokens);
++int qfn_mmq_expert_v2k(int gu_type, int down_type, const void* gate_w,
++                       const void* up_w, const void* down_w, const float* x,
++                       const int32_t* ids, float* gate, float* up, float* out,
++                       int n_tokens, void* scratch, size_t scratch_bytes,
++                       hipStream_t stream);
++// Stages used by the whole chain and the opt-in routed microbench.
++// GU outputs and hq are in compact entry order; down restores slot order.
++int qfn_mmq_expert_v2k_gu(const void* gate_w, const void* up_w, const float* x,
++                          const int32_t* ids, float* gate, float* up,
++                          int n_tokens, void* scratch, size_t scratch_bytes,
++                          hipStream_t stream);
++int qfn_mmq_expert_v2k_bridge(const float* gate, const float* up, void* hq,
++                              int entries, hipStream_t stream);
++int qfn_mmq_expert_v2k_down(int down_type, const void* weights, float* out,
++                            int n_tokens, void* scratch, size_t scratch_bytes,
++                            hipStream_t stream);
++
+ size_t qfn_mmq_q8_1_bytes(int N, int K);
+ 
+ int qfn_mmq_quantize_q8_1(const float* X_f32, void* X_q8, int N, int K,
+diff --git a/src/models/qwen38_flash_next/kernels/rocm/mmq/s26_tsum.hpp b/src/models/qwen38_flash_next/kernels/rocm/mmq/s26_tsum.hpp
+new file mode 100644
+index 00000000..b97bbd29
+--- /dev/null
++++ b/src/models/qwen38_flash_next/kernels/rocm/mmq/s26_tsum.hpp
+@@ -0,0 +1,98 @@
++// SPDX-License-Identifier: MIT
++// Copyright (c) 2026 Niko1221 and the Strata contributors
++// Adapted from https://github.com/Niko1221/Strata
++// V2K/S26/S27: src/kernels/cuda/s26_tsum.cuh, measured base 82f46a8
++// (introduced by 04e1e11afb45c040960e90c834e0fe85a475a4ab).
++// Gufo adaptation: HIP includes and qfn_mmq namespace.
++// Full MIT permission and warranty notice: VENDOR.md in this directory.
++// S26: several warp sums at once (P per-lane values -> P sums), bitwise equal
++// to P separate xor-butterfly warp sums
++// (`for (o = 16; o > 0; o >>= 1) v += shfl_xor(v, o)`).  At offset 16 a lane
++// keeps half of its P values and adds the partner's copy of that half, at 8
++// half again, ... until one value is left, then plain xor steps for the
++// remaining offsets.  Every level adds the same pair of values as the butterfly
++// does (fp add commutes, so x + y == y + x bitwise), only each lane carries
++// fewer of them: P - 1 + (5 - log2 P) cross-lane moves instead of 5 P.  Value
++// j's sum ends in the lanes whose bits 4, 3, .. (MSB first) spell j:
++// tsum_lane<P>(j) is one of them.  On AMD the moves are DPP row_xmask /
++// permlanex16 instead of ds_bpermute.
++#pragma once
++
++#include <hip/hip_runtime.h>
++
++namespace qfn_mmq::s26ts {
++
++#if defined(__HIP_PLATFORM_AMD__)  // (permlanex16 / DPP row_xmask: gfx10+ only)
++__device__ __forceinline__ float xmov16(float v) {
++  return __int_as_float(
++      __builtin_amdgcn_permlanex16(__float_as_int(v), __float_as_int(v),
++                                   0x76543210u, 0xfedcba98u, false, false));
++}
++template<int O>
++__device__ __forceinline__ float xmov(float v) {
++  if constexpr (O == 16)
++    return xmov16(v);
++  else
++    return __int_as_float(__builtin_amdgcn_update_dpp(
++        0, __float_as_int(v), 0x160 + O, 0xf, 0xf, false));
++}
++#else
++template<int O>
++__device__ __forceinline__ float xmov(float v) {
++  return __shfl_xor(v, O, 32);
++}
++#endif
++
++__host__ __device__ constexpr int pow2_ceil(int t) {
++  return t <= 1 ? 1 : t <= 2 ? 2 : t <= 4 ? 4 : t <= 8 ? 8 : t <= 16 ? 16 : 32;
++}
++__host__ __device__ constexpr int log2c(int p) {
++  return p <= 1 ? 0 : p == 2 ? 1 : p == 4 ? 2 : p == 8 ? 3 : p == 16 ? 4 : 5;
++}
++
++template<int O>
++__device__ __forceinline__ float tplain(float x) {
++  if constexpr (O >= 1) {
++    x += xmov<O>(x);
++    return tplain<O / 2>(x);
++  } else
++    return x;
++}
++// v[0..CNT) (CNT a power of two <= 32): this lane's values; returns the sum of
++// value tsum_token<CNT>(lane)
++template<int CNT, int O = 16>
++__device__ __forceinline__ float tsum(float* v, int lane) {
++  if constexpr (CNT > 1) {
++    constexpr int H = CNT / 2;
++    const bool hi = (lane & O) != 0;
++#pragma unroll
++    for (int j = 0; j < H; ++j) {
++      const float send = hi ? v[j] : v[j + H];
++      const float keep = hi ? v[j + H] : v[j];
++      v[j] = keep + xmov<O>(send);
++    }
++    return tsum<H, O / 2>(v, lane);
++  } else {
++    return tplain<O>(v[0]);
++  }
++}
++template<int P>
++__device__ __forceinline__ int tsum_token(int lane) {
++  constexpr int L = log2c(P);
++  int k = 0;
++#pragma unroll
++  for (int b = 0; b < L; ++b)
++    k = (k << 1) | ((lane >> (4 - b)) & 1);
++  return k;
++}
++template<int P>
++__device__ __forceinline__ int tsum_lane(int k) {
++  constexpr int L = log2c(P);
++  int lane = 0;
++#pragma unroll
++  for (int b = 0; b < L; ++b)
++    lane |= ((k >> (L - 1 - b)) & 1) << (4 - b);
++  return lane;
++}
++
++}  // namespace qfn_mmq::s26ts
+diff --git a/tests/cli/release_profile_test.cpp b/tests/cli/release_profile_test.cpp
+index d48648b1..d5ad3a55 100644
+--- a/tests/cli/release_profile_test.cpp
++++ b/tests/cli/release_profile_test.cpp
+@@ -301,6 +301,7 @@ void ReviewRegression(int finding) {
+         {"GUFO_DENSE_TWIN_MODEL", std::nullopt},
+         {"GUFO_DENSE_TWIN_BATCH", "0"},
+         {"GUFO_DENSE_TWIN_MAX_N", std::nullopt},
++        {"GUFO_EXPERT_V2K", "0"},
+         {"GUFO_DRAFT_OUT_MODEL", std::nullopt},
+         {"--speculative", "off"}};
+     const auto exact = ResolveReleaseSettings(Inputs("exact"));
+@@ -787,7 +788,8 @@ void TestResolver() {
+                                           {"--cache-ram-bytes", "4294967296"},
+                                           {"--prefill-chunk", "512"},
+                                           {"--mtp-draft-vocab", "latin"},
+-                                          {"GUFO_DENSE_TWIN_BATCH", "1"}})
++                                          {"GUFO_DENSE_TWIN_BATCH", "1"},
++                                          {"GUFO_EXPERT_V2K", "1"}})
+     Expect(Find(sub, name).value == std::optional(value),
+            "subagent setting: " + name);
+   Expect(Find(sub, "GUFO_LENIENT").value ==
+diff --git a/tests/fixtures/release_flags_golden.md b/tests/fixtures/release_flags_golden.md
+index 74c2f9e5..336caf29 100644
+--- a/tests/fixtures/release_flags_golden.md
++++ b/tests/fixtures/release_flags_golden.md
+@@ -89,6 +89,7 @@ Empty environment values count as unset and produce a warning.
+ | `GUFO_EOG_DEFER_P` | Set the deferred stop probability. | 0.9 | Keep the default unless early end token deferral tests require a different probability. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_EOG_MIN_PROB` | Set the minimum EOG probability required to stop. | 0.2 | Keep the default unless end token probability tests require another minimum. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_EOG_MIN_PROB_EXACT` | Compute EOG probability over the full vocabulary. | Off | Keep it off unless end token decisions require full vocabulary probabilities. | any; generic; qwen3.8-flash-next |
++| `GUFO_EXPERT_V2K` | Run decode experts in the grouped expert kernel. | 1 (0 with profile exact or stock) | Keep it on unless a test requires the per-slot expert kernels. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_HOST` | Set the server address through the environment. | Unset | Leave it unset unless the server address must come from this environment variable. | any; generic; any |
+ | `GUFO_LENIENT` | Accept near miss MTP drafts inside thinking spans. | bounded with MTP; otherwise off | Keep bounded outside exact unless strict speculative acceptance is required. | any; strix-halo-tuned; qwen3.8-flash-next |
+ | `GUFO_LENIENT_LAMBDA` | Set the lenient speculative acceptance bound. | 0.5 | Keep the default unless lenient acceptance tests require a different bound. | any; generic; qwen3.8-flash-next |
+-- 
+2.55.0.windows.3
+
