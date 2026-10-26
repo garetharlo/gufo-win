@@ -1513,7 +1513,7 @@ bundles the LLVM OpenMP runtime; `tools/windows/package.ps1` already ships
 `libomp140.x86_64.dll`. `43deb1e` (#778) is EmbeddingGemma, not in the fork.
 The rest is CI and functional tests. Next gufo sweep starts from `5eedd09`.
 
-### [ ] Strata V2K grouped decode experts (from bubo `296c8ef8`)
+### [x] Strata V2K grouped decode experts (from bubo `296c8ef8`) — neutral, kept opt-in
 
 `haloforge-labs/bubo` ("Halowin Bubo", another Windows gufo fork, ~265 commits
 over upstream at survey) ships the Strata (MIT) grouped-expert decode kernels
@@ -1534,6 +1534,15 @@ and caller-owned persistent scratch (82 KiB at 8 tokens).
 - Gate: greedy haiku byte-identical with the switch off; then interleaved
   `bench -p 2048 -n 128 -d 32768 -r 2` A/B with `GUFO_EXPERT_V2K=0/1`. Bubo
   publishes no numbers, so treat the gain as unmeasured until this passes.
+- Measured 2026-10-26, ported and A/B'd on this host (UD-Q4_K_XL + MTP Q8_0,
+  `bench -p 1 -n 128 -d 32768 -r 2`, greedy, one process per arm): MTP
+  tg128@d32768 96.54 ± 3.51 (off) vs 98.23 ± 3.70 (on) — +1.8%, inside
+  run-to-run noise; AR tg128 35.64 (d0) / 32.00 (d32768) on the same build,
+  matching prior numbers, so the flag-off path is unchanged. The kernel ran
+  (verify batches are 2-8 rows) and matched bubo's own decision to keep it off
+  by default. Kept in the tree as `GUFO_EXPERT_V2K=1`, default off; possibly
+  worth revisiting at higher session concurrency where 2-8-row decode batches
+  dominate.
 
 ### [ ] Strata hipBLASLt tuning tables for gfx1151
 
