@@ -152,13 +152,18 @@ records only make sense behind a byte budget, which their defaults do
    typed argument values the way the reference `tojson` does. Keep this only as
    a check when a future miss shows `common_prefix_tokens` diverging *inside* a
    replayed call rather than at its end.
-5. **Intermediate grid checkpoints, then learned divergence points.** The grid
-   is what keeps a rewritten turn from losing the whole prompt; the learned
-   point is what makes a shared system prompt reusable across separate
-   conversations and subagents. Upstream gufo landed a narrower version of this
-   (`1b8ad798`, #773) and reverted it the same day
-   ([survey](LINUX-PERF-PORT.md)), so take Bubo's tested policy rather than
-   re-deriving it.
+5. **Intermediate grid checkpoints** are implemented: when the stable boundary
+   exceeds the budget, prefill stops once at the largest prefix below 90 % of it
+   and publishes that checkpoint before continuing. On UD-Q4_K_XL at a 3 GiB
+   budget and a 126,024-token prompt, the 126K boundary needs 3.58 GB and is
+   refused; the fitted 101,227-token checkpoint (2.70 GiB) let the next turn
+   re-read 24,820 instead of 126,047 tokens and reach its first token in 18.3 s
+   instead of 85.9 s. **Learned divergence points** remain: they make a shared
+   system prompt reusable across separate conversations and subagents. Take
+   Bubo's tested policy rather than re-deriving it
+   ([survey](LINUX-PERF-PORT.md)); upstream's narrower grid (`1b8ad798`, #773)
+   was reverted the same day, so keep the fake-runner test and a GPU replay
+   check with any change here.
 6. **Leader/follower waiting** for fan-out: subagents started from one system
    prompt currently each prefill the shared prefix, and prefill is serial, so
    the copies cost their sum.
