@@ -1513,36 +1513,15 @@ bundles the LLVM OpenMP runtime; `tools/windows/package.ps1` already ships
 `libomp140.x86_64.dll`. `43deb1e` (#778) is EmbeddingGemma, not in the fork.
 The rest is CI and functional tests. Next gufo sweep starts from `5eedd09`.
 
-### [x] Strata V2K grouped decode experts (from bubo `296c8ef8`) — neutral, kept opt-in
+### [-] Strata V2K grouped decode experts (from bubo `296c8ef8`) — rejected, removed
 
-`haloforge-labs/bubo` ("Halowin Bubo", another Windows gufo fork, ~265 commits
-over upstream at survey) ships the Strata (MIT) grouped-expert decode kernels
-already adapted to HIP/gfx1151 for this model: Q4_K gate/up over the 10 routed
-experts on narrow decode batches (up to 8 tokens, hidden 2560, ff 640), wave32
-x 8 waves, 4 rows per wave, LDS staging, Q8_1 activations, device expert IDs
-and caller-owned persistent scratch (82 KiB at 8 tokens).
-
-- Files: `mmq/expert_v2k.hip.cpp` (408 lines), `mmq/expert_v2k.hpp`,
-  `mmq/s26_tsum.hpp`, plus hunks in `kernels/rocm/executor.{cpp,hpp}` and
-  `mmq/qfn_mmq.h`. Opt-in env `GUFO_EXPERT_V2K=1`; bubo made it OFF by default
-  everywhere in `82dd8e25` and rejects it in exact.
-- Apply check against this fork (2026-10-25): all new files land clean; only
-  `executor.cpp` and `qfn_mmq.h` context hunks conflict (drift, not
-  structure), and the bubo-only `release_switches`/`release_profile_test`
-  halves must be dropped. Patch kept at `patches/strata-v2k-bubo-296c8ef8.patch`
-  (regenerate with `git -C <bubo clone> format-patch -1 296c8ef8 -o <out>`).
-- Gate: greedy haiku byte-identical with the switch off; then interleaved
-  `bench -p 2048 -n 128 -d 32768 -r 2` A/B with `GUFO_EXPERT_V2K=0/1`. Bubo
-  publishes no numbers, so treat the gain as unmeasured until this passes.
-- Measured 2026-10-26, ported and A/B'd on this host (UD-Q4_K_XL + MTP Q8_0,
-  `bench -p 1 -n 128 -d 32768 -r 2`, greedy, one process per arm): MTP
-  tg128@d32768 96.54 ± 3.51 (off) vs 98.23 ± 3.70 (on) — +1.8%, inside
-  run-to-run noise; AR tg128 35.64 (d0) / 32.00 (d32768) on the same build,
-  matching prior numbers, so the flag-off path is unchanged. The kernel ran
-  (verify batches are 2-8 rows) and matched bubo's own decision to keep it off
-  by default. Kept in the tree as `GUFO_EXPERT_V2K=1`, default off; possibly
-  worth revisiting at higher session concurrency where 2-8-row decode batches
-  dominate.
+`haloforge-labs/bubo` ships the MIT Strata Q4_K grouped-expert decode kernels
+already adapted to HIP/gfx1151 (wave32 x 8 waves, 4 rows per wave, Q8_1
+activations, 82 KiB scratch). Ported and A/B'd 2026-10-26 (`bench -p 1 -n 128
+-d 32768 -r 2`, MTP Q8_0): tg128@d32768 96.54 ± 3.51 off vs 98.23 ± 3.70 on,
++1.8% inside run-to-run noise, AR unchanged. It cost 678 lines plus a vendored
+MIT kernel for a default-off branch, and the only gate was byte-identical
+output with the switch off, so it was reverted. Bubo also defaults it off.
 
 ### [ ] Strata hipBLASLt tuning tables for gfx1151
 
