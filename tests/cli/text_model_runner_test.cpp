@@ -1343,6 +1343,13 @@ void TestSnapshotCaptureFailureReleasesReservationAndKeepsRequestSuccessful() {
   extension.Invalidate();
 }
 
+void TestCacheRamBudgetOverride() {
+  ::setenv("GUFO_CACHE_RAM_BYTES", "1048576", 1);
+  Expect(gufo::server::HostSnapshotBudgetBytes() == 1048576,
+         "GUFO_CACHE_RAM_BYTES replaces the automatic snapshot budget");
+  ::unsetenv("GUFO_CACHE_RAM_BYTES");
+}
+
 }  // namespace
 
 int main() {
@@ -1372,6 +1379,7 @@ int main() {
   TestPersistentSnapshotRestoresAcrossPools();
   TestSharedPrefixIsLearnedAndRestoredAcrossConversations();
   TestMeasuredStateIsReconciledWithClaim();
+  TestCacheRamBudgetOverride();
   TestSnapshotBudgetRefusalDoesNotFailCompletedRequest();
   std::ostringstream failure_log;
   previous = std::clog.rdbuf(failure_log.rdbuf());

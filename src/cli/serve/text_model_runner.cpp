@@ -3,7 +3,9 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <future>
 #include <limits>
@@ -56,8 +58,21 @@ std::size_t HostSnapshotBudgetBytes() {
     }
     break;
   }
-  return static_cast<std::size_t>(std::min<std::uint64_t>(
-      available / 2, std::numeric_limits<std::size_t>::max()));
+  const auto available_size = static_cast<std::size_t>(std::min<std::uint64_t>(
+      available, std::numeric_limits<std::size_t>::max()));
+  // The half-of-available default cannot retain a checkpoint near a long
+  // session's context, which pins reuse to the oldest prefix that fits.
+  if (const char* text = std::getenv("GUFO_CACHE_RAM_BYTES")) {
+    std::size_t requested = 0;
+    const std::string_view value(text);
+    const auto parsed =
+        std::from_chars(value.data(), value.data() + value.size(), requested);
+    if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() &&
+        requested != 0) {
+      return std::min(requested, available_size);
+    }
+  }
+  return available_size / 2;
 }
 
 namespace {

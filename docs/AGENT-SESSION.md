@@ -98,7 +98,7 @@ Path names are shared, so each row is a diff in our tree, not a missing file.
 | Stable boundary capture | prefill stops at the boundary, then a separate pass | captured inside the final prefill pass when it lands within 8 tokens of the batch end; the batch may carry up to 128 tokens past a 4,096 chunk |
 | Tool-turn replay | arguments parsed from JSON and re-rendered by the template | typed argument values rendered the way the reference templates' `tojson` does (and Responses namespaces flattened) so a replayed call reproduces the generated tokens and its checkpoint still matches |
 | Eviction policy | byte budget plus entry count | purpose ranking (retry / history / continuation / branch point); retry copies may not displace the last useful checkpoint of a prefix family; a shared prefix two conversations diverge after is never treated as covered |
-| Operator control | automatic budget only | `--cache-ram-bytes`, `GUFO_CACHE_HOST_FLOOR_MB`, `GUFO_CACHE_REMOVAL_LOG`; a release profile with separate `subagents` values (`--sessions 4`, `--context 131072`, `--prefill-chunk 512`, `--mtp-draft-vocab latin`) |
+| Operator control | `GUFO_CACHE_RAM_BYTES` override, automatic half-of-available budget otherwise | `--cache-ram-bytes`, `GUFO_CACHE_HOST_FLOOR_MB`, `GUFO_CACHE_REMOVAL_LOG`; a release profile with separate `subagents` values (`--sessions 4`, `--context 131072`, `--prefill-chunk 512`, `--mtp-draft-vocab latin`) |
 
 Snapshot payload is not the constraint to solve first: per Bubo's own
 measurements a Flash-Next checkpoint is about 0.5 GB at 5k tokens, so 128

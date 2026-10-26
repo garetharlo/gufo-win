@@ -196,6 +196,16 @@ limits), and the disk budget. This bounds queued captures/writes and each disk
 read separately; it allocates nothing upfront. Live model state and retained
 RAM snapshots have separate budgets.
 
+The retained snapshot budget defaults to half of the host memory available
+after model/session loading. Set `GUFO_CACHE_RAM_BYTES=<bytes>` before starting
+the server to override it; the value is capped by that available memory. Raise
+it on a dedicated server when a long conversation should keep a checkpoint near
+its context size. Boundaries larger than the budget are skipped without
+evicting the retained prefix, so the default can pin reuse to an early
+checkpoint and replay everything after it. The automatic staging limit still
+derives from the budget but stays capped at 1 GiB; set
+`--cache-disk-staging-bytes` explicitly to stage a larger checkpoint.
+
 Snapshots that exceed either limit are skipped with their required size and
 available budget logged; live conversation reuse remains available. Existing
 files that exceed the current staging limit are preserved subject to disk LRU
