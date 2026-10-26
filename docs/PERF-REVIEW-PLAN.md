@@ -81,3 +81,45 @@ output comparison on a fixed seed. Reject on any mismatch.
 - Committed: `e5c561f` `SampleResidual` skips sorted rebuild (less work per
   rejected draft; end-to-end delta unverified — needs Step 1/5 run).
 - Open target: pp2048 prefill gap vs upstream.
+
+## Static review: `src/core/hip` + `qwen38_flash_next` (2026-10-25)
+
+Read every file in both trees without a profile, looking for work that is
+provably redundant rather than merely unmeasured. Two changes were justified
+as strictly-less-work with bit-identical output; both are CPU-side, so neither
+needs a GPU parity run, only the existing unit/parity tests.
+
+Landed:
+
+- `ngram.cpp` `HashNgramRows` — the per-order XOR mix was re-summed from
+  `ctx[0]` for every n-gram order, costing `n(n-1)/2` multiplies per token.
+  The mix for order `k` is order `k-1`'s mix plus one term, so it now grows
+  incrementally: `n-1` multiplies, identical terms in identical order. Runs
+  once per token of every prefill chunk and every decode step.
+- `engine.cpp` `DecodeBatchImpl` — the drafting round loop declared
+  `heads`/`bodies` inside the loop body, so each of up to ~7 rounds per decode
+  cycle heap-allocated two vectors. Both now live outside and are cleared per
+  round.
+
+Examined and deliberately left alone (with the reason, so this is not
+re-litigated):
+
+- `prompt_lookup.hpp` `Find` — the `at(i)` branch per backward comparison
+  costs ~0.1 µs per proposal and splitting the tail/committed runs would add an
+  invariant to a correctness-critical path.
+- `executor.cpp` `Run` double lookup (`warmed_` + `graphs_`) — required, a key
+  can be warmed eagerly and captured later.
+- `executor.cpp` `WaitFlag` `steady_clock::now()` per poll — CPU burn, not
+  latency; polling is the deliberate graph-completion design.
+- `executor.cpp` `std::function` layer bodies and `CheckCancellation` — sub-µs
+  against a ~25 ms decode cycle.
+- `DecodeBatchImpl` `std::any_of` over ≤8 requests — 64 pointer compares.
+- `cpu_ops.cpp` `Rope` recomputing `powf` per head — reference/oracle path.
+- `kernels.hip.cpp` RoPE `powf` sites — ~0.5 µs/token; `mmq/` is vendor code.
+- `mtp_policy.hpp`, `mtp_sampling.hpp`, `draft_vocab.hpp`,
+  `platform/tuning.hpp`, `core/hip/detail/dispatch_telemetry.hpp` — already
+  cached/precomputed or single-pass.
+
+Conclusion: inside this scope the remaining static candidates are below
+measurement noise. The real gap (pp2048 prefill) needs Step 2 profiling, not
+more reading.
