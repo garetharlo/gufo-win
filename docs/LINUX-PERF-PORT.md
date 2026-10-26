@@ -1562,3 +1562,24 @@ a patch.
   tiering; unified memory makes that design moot here.
 - `wallawalla47/infernix`: RTX 5090 only (pinned-RAM experts over PCIe, NVMe
   n-gram reads); same reasoning.
+
+## Host CPU review 2026-10-26 (qwen38_flash_next)
+
+Static review of the model's host-side code (engine, ngram, prompt lookup, MTP
+policy/sampling, cpu_ops, reference). The hot decode path is already tight:
+no per-token allocations, string building or map lookups; the vendored mmq
+kernels are excluded (upstream-tracked, see `mmq/VENDOR.md`). One real defect:
+
+- `[x]` **RoPE recomputed its transcendental tables per head** in
+  `cpu_ops.cpp::Rope` and in the mrope lambda of `reference.cpp`.
+  `pow/cos/sin` depend only on the pair index (and its mrope axis), never on
+  the head, yet were called `heads x rotary/2` times per token. Hoisted to
+  `rotary/2` per call; results are bit-identical (same operands, same order).
+  These paths run per token in the CPU reference oracle and the reference
+  probe, so the fix is exactness-preserving where output is compared against
+  the GPU.
+
+Rejected as not worth changing: `MtpAcceptEstimate`'s linear bin scan and
+`MtpLengthState::Observe`'s per-token loop (8 and ~30 elements, negligible);
+`LatinTextVocabulary` (one-shot load-time vocab filter); `PlatformTuning()`
+per-step calls (Meyers singleton, a load + branch, no measurable gain).

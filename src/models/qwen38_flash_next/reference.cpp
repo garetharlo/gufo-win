@@ -354,17 +354,21 @@ void ReferenceModel::Attention(const LayerWeights& l, AttentionState& s,
     }
     const auto coordinates = layout->Position(physical);
     const auto pairs = c_.rotary_dim / 2;
+    // The angle depends only on the pair and its axis coordinate, never on
+    // the head: one cos/sin per pair, reused by every head (bit-identical).
+    std::vector<std::array<float, 2>> rotations(pairs);
+    for (std::uint32_t i = 0; i < pairs; ++i) {
+      const auto axis = i % 3 == 1 && i < 33 ? 1 : i % 3 == 2 && i < 30 ? 2 : 0;
+      const float angle = coordinates[axis] *
+                          std::pow(c_.rope_theta, -2.0F * i / c_.rotary_dim);
+      rotations[i] = {std::cos(angle), std::sin(angle)};
+    }
     for (std::uint32_t h = 0; h < heads; ++h) {
       for (std::uint32_t i = 0; i < pairs; ++i) {
-        const auto axis = i % 3 == 1 && i < 33   ? 1
-                          : i % 3 == 2 && i < 30 ? 2
-                                                 : 0;
-        const float angle = coordinates[axis] *
-                            std::pow(c_.rope_theta, -2.0F * i / c_.rotary_dim);
         const auto offset = static_cast<std::size_t>(h) * dim + i;
         const float a = values[offset], b = values[offset + pairs];
-        values[offset] = a * std::cos(angle) - b * std::sin(angle);
-        values[offset + pairs] = a * std::sin(angle) + b * std::cos(angle);
+        values[offset] = a * rotations[i][0] - b * rotations[i][1];
+        values[offset + pairs] = a * rotations[i][1] + b * rotations[i][0];
       }
     }
   };

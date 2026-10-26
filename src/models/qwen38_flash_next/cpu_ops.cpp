@@ -156,18 +156,25 @@ float Softplus(float x) noexcept {
 void Rope(float* x, std::uint32_t heads, std::uint32_t head_dim,
           std::uint32_t rotary_dim, std::uint32_t pos, float theta) {
   const std::uint32_t half = rotary_dim / 2;
+  if (half == 0)
+    return;
+  // cos/sin depend only on the pair and the position, never on the head:
+  // compute them once per call and reuse across heads (bit-identical).
+  std::vector<float> cos_table(half), sin_table(half);
+  for (std::uint32_t i = 0; i < half; ++i) {
+    const float freq = std::pow(
+        theta, -2.0F * static_cast<float>(i) / static_cast<float>(rotary_dim));
+    const float angle = static_cast<float>(pos) * freq;
+    cos_table[i] = std::cos(angle);
+    sin_table[i] = std::sin(angle);
+  }
   for (std::uint32_t h = 0; h < heads; ++h) {
     float* v = x + static_cast<std::size_t>(h) * head_dim;
     for (std::uint32_t i = 0; i < half; ++i) {
-      const float freq = std::pow(theta, -2.0F * static_cast<float>(i) /
-                                             static_cast<float>(rotary_dim));
-      const float angle = static_cast<float>(pos) * freq;
-      const float c = std::cos(angle);
-      const float s = std::sin(angle);
       const float a = v[i];
       const float b = v[i + half];
-      v[i] = a * c - b * s;
-      v[i + half] = a * s + b * c;
+      v[i] = a * cos_table[i] - b * sin_table[i];
+      v[i + half] = a * sin_table[i] + b * cos_table[i];
     }
   }
 }
