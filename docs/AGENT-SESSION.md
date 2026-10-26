@@ -33,6 +33,34 @@ below is marked as derived.
 | Agent session, tokens re-read | 52,186 vs 6,761 (7.7x more) |
 | Agent session, total wait for first tokens | 45 s vs 9.2 s |
 
+## Values to beat, and where we stand
+
+The two tables above are the record: table 1 is one 10-turn session per engine
+on the same machine, table 2 is the same-day per-task ratio. Every number in
+them is a target. Where we have re-measured on UD-Q4_K_XL (gfx1151, `-c 8192`,
+`-j 1`) the current value is listed; a blank means only the image value exists.
+
+| Cell | Bubo | Ours now | Standing |
+| --- | --- | --- | --- |
+| 10-turn first-token wait | 9.2 s | 5.0 s | ahead, on shorter prompts |
+| First token, turn 10 | 1.7 s | 0.50 s | ahead, on shorter prompts |
+| Median session decode | 64.0 tok/s | 35.1 (45.7 with MTP) | behind |
+| Slowest turn | 49.0 tok/s | 34.6 (not a slow turn: flat) | behind |
+| Re-read share of prompt tokens | 13 % (6,761 of 52,186) | 14.4 % (1,651 of 11,432) | close, smaller session |
+| 2K-token prompt read | 1,269 tok/s | 1,221–1,243 | behind 2–4 % (image value) |
+| Rename edit | 97 tok/s | 99–101 | ahead (image value) |
+| Comment edit | 86–87 tok/s | 90–91 | ahead (image value) |
+| Prose | 41–42 tok/s | 40–41 | behind 1–2 % (image value) |
+| Six-prompt mix | 1.00 | 0.85 | behind 18 % (image value) |
+
+"Ours now" is not apples to apples with Bubo's session: our prompts reached
+1,606 tokens instead of tens of thousands, so the wait totals are small in both
+engines and prove nothing on their own. Closing the two real gaps means
+re-running this table on a transcript long enough for Bubo's advantage to
+show — the re-read share then drives the wait, which is what the 52k vs 6,761
+row is about. The single-turn cells (prose, edits, 2K read) have not been
+re-measured since the cache fix and still hold their pre-fix image values.
+
 ## What the numbers say
 
 - **The gap is prompt reuse, not kernels.** A 10-turn session re-read 52,186
