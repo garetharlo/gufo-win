@@ -164,6 +164,15 @@ and d32K 77.05 vs 25.82 (large gain, attributable to the prompt-lookup
 default flip at `561c532e`, which postdates the diary row, not to this
 review's changes). Windows numbers stay directional per the rules above.
 
+A/B settled it (2026-10-25, worktree at `561c532e` vs `489e42b1`, same
+workload): all four metrics identical within noise (pp2048 1620.33 vs
+1619.64–1630.59; tg16 59.96 vs 59.41–60.24; pp2048 d32K **1406.37 ± 0.72**
+vs 1405.60–1408.38; tg16 d32K 77.39 vs 77.36–77.47). The review commits and
+the SmallGemm fix are performance-neutral. The pp d32K dip vs the diary row
+is present in both binaries and predates them — it rides with `561c532e`
+(prompt-lookup default on), the same change that took tg16 from 28 to 60
+and 26 to 77: a ~5% deep-context prefill cost buying ~2.5x decode.
+
 ### Windows host workflow gotchas
 
 - Test executables live in `build\gpu-test\tests\...`, three levels below
