@@ -6,7 +6,6 @@
 #include <limits>
 #include <random>
 #include <stdexcept>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -303,22 +302,41 @@ TokenId SamplingDistribution::SampleResidual(
   if (candidate_ids.size() != candidate_probabilities.size()) {
     throw std::invalid_argument("sparse probability row is malformed");
   }
-  std::unordered_map<TokenId, double> draft;
+  // Cache-resident sorted draft instead of an unordered_map: the candidate
+  // row is a handful of tokens and entries_ can span the full vocabulary, so
+  // per-call hashing and node allocations outweigh binary search.
+  std::vector<std::pair<TokenId, double>> draft;
+  draft.reserve(candidate_ids.size());
   for (std::size_t index = 0; index < candidate_ids.size(); ++index) {
     const float probability_value = candidate_probabilities[index];
     if (!std::isfinite(probability_value) || probability_value < 0.0F) {
       throw std::invalid_argument(
           "sparse probability row contains an invalid value");
     }
-    draft[candidate_ids[index]] += static_cast<double>(probability_value);
+    draft.emplace_back(candidate_ids[index],
+                       static_cast<double>(probability_value));
   }
+  std::sort(draft.begin(), draft.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+  for (std::size_t i = 1; i < draft.size(); ++i) {
+    if (draft[i].first == draft[i - 1].first) {
+      draft[i - 1].second += draft[i].second;
+      draft.erase(draft.begin() + static_cast<std::ptrdiff_t>(i));
+      --i;
+    }
+  }
+  const auto draft_at = [&draft](TokenId token) -> double {
+    const auto it = std::lower_bound(
+        draft.begin(), draft.end(), token,
+        [](const auto& entry, TokenId value) { return entry.first < value; });
+    return it != draft.end() && it->first == token ? it->second : 0.0;
+  };
 
   std::vector<Probability> residual;
   residual.reserve(entries_.size());
   double sum = 0.0;
   for (const auto& entry : entries_) {
-    const auto found = draft.find(entry.token);
-    const double q = found == draft.end() ? 0.0 : found->second;
+    const double q = draft_at(entry.token);
     const double value = std::max(entry.value - q, 0.0);
     if (value > 0.0) {
       residual.push_back({.token = entry.token, .value = value});
