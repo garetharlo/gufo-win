@@ -28,6 +28,10 @@ constexpr std::uint64_t kMaxSnapshotBudgetGb = 7;
 /// worth the copy it costs during prefill.
 constexpr std::size_t kMinGridTokens = 1024;
 
+namespace {
+std::uint64_t snapshot_budget_gb = 0;
+}  // namespace
+
 /// Ordinary host allocations use the host budget, not HIP's device capacity.
 std::size_t HostSnapshotBudgetBytes() {
   const long pages = sysconf(_SC_AVPHYS_PAGES);
@@ -74,6 +78,14 @@ std::size_t HostSnapshotBudgetBytes() {
   // an operator can request up to 7 GiB when the host has room.
   const auto default_bytes =
       static_cast<std::size_t>(kDefaultSnapshotBudgetGb << 30);
+  const auto budget_for_gigabytes = [&](std::uint64_t gigabytes) {
+    return std::min(available_size,
+                    static_cast<std::size_t>(
+                        std::min(gigabytes, kMaxSnapshotBudgetGb) << 30));
+  };
+  if (snapshot_budget_gb != 0) {
+    return budget_for_gigabytes(snapshot_budget_gb);
+  }
   std::size_t budget = std::min(available_size / 2, default_bytes);
   if (const char* text = std::getenv("GUFO_CACHE_RAM_GB")) {
     std::uint64_t gigabytes = 0;
@@ -82,12 +94,14 @@ std::size_t HostSnapshotBudgetBytes() {
         std::from_chars(value.data(), value.data() + value.size(), gigabytes);
     if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() &&
         gigabytes != 0) {
-      budget = std::min(available_size,
-                        static_cast<std::size_t>(
-                            std::min(gigabytes, kMaxSnapshotBudgetGb) << 30));
+      budget = budget_for_gigabytes(gigabytes);
     }
   }
   return budget;
+}
+
+void SetHostSnapshotBudgetGb(std::uint64_t gigabytes) noexcept {
+  snapshot_budget_gb = gigabytes;
 }
 
 namespace {

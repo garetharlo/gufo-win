@@ -474,6 +474,7 @@ void PrintServeHelp(std::string_view program_name,
     std::size_t cache_disk_bytes =
         server::TextRunnerDiskCacheOptions::kDefaultCapacityBytes;
     std::size_t cache_disk_staging_bytes = 0;
+    std::size_t cache_ram_gb = 0;
 
     gufo::cli::ArgParser parser(
         std::string(program_name) + " serve llm",
@@ -591,6 +592,10 @@ void PrintServeHelp(std::string_view program_name,
                      "RAM limit for queued snapshots and each disk read "
                      "(default: 0 = auto, at most 1 GiB and 1/8 available RAM)",
                      "Cache", &cache_disk_staging_bytes);
+    parser.AddOption("", "--cache-ram-gb", "N",
+                     "Snapshot budget in GiB (0 = automatic, default 6, "
+                     "capped at 7)",
+                     "Cache", &cache_ram_gb);
     ServerOptionHelpTargets server_help;
     AddServerOptionsForHelp(parser, &server_help);
     parser.PrintHelp();
@@ -944,6 +949,7 @@ int RunServe(std::span<const char* const> args) {
     std::size_t cache_disk_bytes =
         server::TextRunnerDiskCacheOptions::kDefaultCapacityBytes;
     std::size_t cache_disk_staging_bytes = 0;
+    std::size_t cache_ram_gb = 0;
 
     gufo::cli::ArgParser llm_parser(
         "gufo serve llm",
@@ -1058,6 +1064,10 @@ int RunServe(std::span<const char* const> args) {
         "RAM limit for queued snapshots and each disk read "
         "(default: 0 = auto, at most 1 GiB and 1/8 available RAM)",
         "Cache", &cache_disk_staging_bytes);
+    llm_parser.AddOption("", "--cache-ram-gb", "N",
+                         "Snapshot budget in GiB (0 = automatic, default 6, "
+                         "capped at 7)",
+                         "Cache", &cache_ram_gb);
 
     add_server_options(llm_parser);
     if (!llm_parser.Parse(sub_args, &parse_err)) {
@@ -1072,6 +1082,7 @@ int RunServe(std::span<const char* const> args) {
     if (!valid_server_options()) {
       return 2;
     }
+    server::SetHostSnapshotBudgetGb(cache_ram_gb);
     bool sampling_valid = true;
     try {
       sampling_config.Validate();

@@ -198,11 +198,12 @@ RAM snapshots have separate budgets.
 
 The retained snapshot budget defaults to 6 GiB, or half of the host memory
 available after model/session loading when that is smaller. Set
-`GUFO_CACHE_RAM_GB=<gigabytes>` before starting the server to choose a different
-budget; the override is capped at 7 GiB and by that available memory. When the
-stable boundary cannot fit, prefill retains one intermediate checkpoint at the
-largest prefix below 90% of the budget, so a long session moves its reuse point
-forward instead of pinning the oldest checkpoint.
+`GUFO_CACHE_RAM_GB=<gigabytes>` before starting the server, or pass
+`--cache-ram-gb <gigabytes>`, to choose a different budget; the option wins over
+the environment, and either is capped at 7 GiB and by that available memory.
+When the stable boundary cannot fit, prefill retains one intermediate checkpoint
+at the largest prefix below 90% of the budget, so a long session moves its reuse
+point forward instead of pinning the oldest checkpoint.
 Boundaries larger than the budget are skipped without evicting the retained
 prefix. The automatic staging limit still derives from the budget but stays
 capped at 1 GiB; set `--cache-disk-staging-bytes` explicitly to stage a larger

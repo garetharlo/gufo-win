@@ -1438,6 +1438,12 @@ void TestCacheRamBudgetOverride() {
   const auto capped = gufo::server::HostSnapshotBudgetBytes();
   Expect(capped >= two && capped <= static_cast<std::size_t>(7ULL << 30),
          "GUFO_CACHE_RAM_GB is capped at 7 GiB");
+  ::setenv("GUFO_CACHE_RAM_GB", "2", 1);
+  gufo::server::SetHostSnapshotBudgetGb(1);
+  const auto cli = gufo::server::HostSnapshotBudgetBytes();
+  Expect(cli > 0 && cli <= static_cast<std::size_t>(1ULL << 30),
+         "--cache-ram-gb overrides the environment");
+  gufo::server::SetHostSnapshotBudgetGb(0);
   ::unsetenv("GUFO_CACHE_RAM_GB");
 }
 

@@ -67,6 +67,10 @@ struct TextRunnerDiskCacheOptions {
 /// Host snapshot budget after accounting for cgroup limits and headroom.
 [[nodiscard]] std::size_t HostSnapshotBudgetBytes();
 
+/// Overrides the host snapshot budget in GiB for this process. Zero restores
+/// the automatic/environment behavior.
+void SetHostSnapshotBudgetGb(std::uint64_t gigabytes) noexcept;
+
 enum class TextExecutionPlanKind : std::uint8_t {
   kSerial,
   kBatched,
