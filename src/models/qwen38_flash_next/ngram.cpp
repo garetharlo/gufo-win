@@ -41,11 +41,11 @@ void HashNgramRows(const Config& c, NgramHistory& history,
       ctx[s] = static_cast<std::uint64_t>(cut ? eos : t);
     }
     std::uint32_t* out = rows.data() + i * c.ple_heads;
+    // The mix for order k is order k-1's mix with one more term, so grow it
+    // instead of re-summing every shorter order.
+    std::uint64_t mixed = ctx[0] * c.ple_multipliers[0];
     for (std::uint32_t order = 2; order <= n; ++order) {
-      std::uint64_t mixed = ctx[0] * c.ple_multipliers[0];
-      for (std::uint32_t j = 1; j < order; ++j) {
-        mixed ^= ctx[j] * c.ple_multipliers[j];
-      }
+      mixed ^= ctx[order - 1] * c.ple_multipliers[order - 1];
       const std::uint32_t base = (order - 2) * c.ple_heads_per_ngram;
       for (std::uint32_t g = 0; g < c.ple_heads_per_ngram; ++g) {
         const std::uint32_t h = base + g;
