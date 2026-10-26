@@ -1586,9 +1586,11 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
     return false;
   // Each round shares predictor projections across ready sessions.
   // Attention state, proposal distributions and RNG streams stay private.
+  std::vector<rocm::Executor::MtpHeadItem> heads;
+  std::vector<rocm::Executor::MtpBatchItem> bodies;
   for (;;) {
-    std::vector<rocm::Executor::MtpHeadItem> heads;
-    std::vector<rocm::Executor::MtpBatchItem> bodies;
+    heads.clear();
+    bodies.clear();
     for (std::size_t i = 0; i < requests.size(); ++i) {
       auto& p = pending[i];
       if (!requests[i].session->session_->Cancelled() && p.speculative &&
