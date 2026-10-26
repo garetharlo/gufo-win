@@ -1258,7 +1258,10 @@ __global__ void SmallGemmKernel(const void* w, const float* x, float* out,
         float dot = 0.0f;
 #pragma unroll
         for (unsigned r = 0; r < 4; ++r) {
-          dot += wv[st][r] * xv[st][j][r];
+          // Materialized per product: without this, contractions in the
+          // unrolled chain varied between token-width instantiations and the
+          // low bits of a row differed across batch widths.
+          dot = Materialize(dot + wv[st][r] * xv[st][j][r]);
         }
         acc[j] = Materialize(acc[j] + dot);
       }
