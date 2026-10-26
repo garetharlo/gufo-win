@@ -1,0 +1,59 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gufo qwen3.8-flash-next — spec-decoding A/B benchmark</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid currentColor; padding: .45rem .7rem; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  .win { color: #2e7d32; font-weight: 600; }
+  .loss { color: #c62828; }
+  .noise { opacity: .6; }
+  code { background: rgba(127,127,127,.15); padding: 0 .3em; border-radius: 3px; }
+  .meta { color: grey; font-size: .9rem; }
+  footer { margin-top: 2.5rem; border-top: 1px solid currentColor; padding-top: .8rem; font-size: .85rem; opacity: .8; }
+</style>
+</head>
+<body>
+
+<h1>Speculative-decoding A/B — online accept table &amp; stall clamp</h1>
+<p class="meta">Model: Qwen3.8-Flash-Next (Unsloth UD-Q4_K_XL + shared-Q8_0 MTP) · AMD Strix Halo gfx1151 · 128 GB unified memory · 2026-10-26 · deterministic seeds, 1 repetition</p>
+
+<p>Baseline: <code>gufo.exe</code> built before commit <code>df097b30</code>. Candidate: same source with the online accept-probability table (Beta counts seeded from the 2026-09-25 prior, weight 32) and the 4&times;-median stall clamp on cycle-cost samples.</p>
+
+<h2>Decode / prefill throughput</h2>
+<table>
+  <thead><tr><th>Metric</th><th>Baseline (t/s)</th><th>Candidate (t/s)</th><th>Δ</th></tr></thead>
+  <tbody>
+    <tr><td>tg128 MTP @ 8K context</td><td>50.17</td><td>51.13</td><td class="win">+1.9%</td></tr>
+    <tr><td>tg128 MTP @ 32K context</td><td>93.88</td><td>93.54</td><td class="loss">−0.4%</td></tr>
+    <tr class="noise"><td>tg128 AR @ 8K (no spec — control)</td><td>31.72</td><td>33.04</td><td>+4.2% (noise floor)</td></tr>
+    <tr class="noise"><td>pp8192 prefill (control)</td><td>1578.56</td><td>1632.48</td><td>+3.4% (noise floor)</td></tr>
+  </tbody>
+</table>
+
+<h2>Output equivalence</h2>
+<table>
+  <thead><tr><th>Run</th><th>Cycles</th><th>Drafted</th><th>Accepted</th><th>Lookup prop/acc</th><th>output_sha256 (match)</th></tr></thead>
+  <tbody>
+    <tr><td>tg128 MTP @ 8K</td><td>44</td><td>130</td><td>83</td><td>21 / 14</td><td class="win">identical</td></tr>
+    <tr><td>tg128 MTP @ 32K</td><td>17</td><td>111</td><td>111</td><td>102 / 102</td><td class="win">identical</td></tr>
+  </tbody>
+</table>
+
+<h2>Interpretation</h2>
+<ul>
+  <li><strong>Output is unchanged:</strong> identical SHA-256 and acceptance counters — the online table only feeds the draft-side survival trim and changed no decision in these runs.</li>
+  <li><strong>Speed deltas are single-run noise:</strong> the untouched AR control alone moved +4.2%. Neither MTP number is distinguishable from zero at this repetition count.</li>
+  <li><strong>The runs are too short to exercise the change:</strong> the table needs ~32 observations per (depth, top-prob) bin; 44 cycles barely seeds the hottest bin. The stall clamp only acts on stalls, which a controlled run does not produce.</li>
+</ul>
+
+<footer>Produced by gufo-win <code>tools/windows/bench-flash-next-context.ps1</code> (pp / tg-ar / tg-mtp sweeps). Verdict: throughput-neutral on this workload; a longer, multi-repetition decode or a stall-prone serving workload is required to measure the change.</footer>
+
+</body>
+</html>
