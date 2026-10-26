@@ -10,6 +10,8 @@ results and qualification gaps live in:
 - [Qwen3-ASR](models/qwen3-asr/BENCHMARKS.md)
 - [MiniMax H3](models/minimax-h3/BENCHMARKS.md)
 
+End-to-end coding-agent session against Bubo: [agent session](AGENT-SESSION.md).
+
 ## Model benchmark driver
 
 `tools/bench/model-bench.py` measures the tables of a model's `BENCHMARKS.md`
