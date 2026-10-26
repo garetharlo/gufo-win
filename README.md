@@ -16,7 +16,7 @@ containers. The Linux original lives at
 
 Qwen3.8-Flash-Next Q4 (`UD-Q4_K_XL` + MTP Q8_0), 128 GB unified memory with a
 96 GB dedicated carve; direct `gufo bench`, greedy, two timed repetitions.
-Long-context sweep, 8K to 256K (October 2026, v0.2.0):
+Long-context sweep, 8K to 256K (October 26, 2026):
 
 | Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
 | --- | ---: | ---: | ---: | ---: |
