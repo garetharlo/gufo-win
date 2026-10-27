@@ -85,3 +85,17 @@ so every overlap stage is measured on tg too.
   pp512 1,176.89 -> 1,203.29 (+2.2%), pp2048 1,645.26 -> 1,718.11 (+4.4%),
   pp4096 1,642.46 -> 1,705.69 (+3.9%), tg128 34.85 -> 34.91 (noise).
   Upstream: +4.9/+4.1/+4.3% with the overlaps, -30% GDN call time at pp512.
+- 2026-10-27: the README upstream-comparison table was re-measured (NPU off;
+  depths 0/16K/32K, pp2048/tg128, two reps, one process per mode). Prefill
+  1,710.08 / 1,512.37 / 1,487.24 (AR) and 1,656.11 / 1,471.97 / 1,446.46 (MTP)
+  against upstream 1,684.74 / 1,465.02 / 1,443.87 and 1,631.13 / 1,413.58 /
+  1,392.54: +1.5..+4.1%. Decode is unchanged at d0 and d32K; the 16K MTP cell
+  fell 76.37 -> 43.12 tok/s and was validated: `--validate-prefill 4096` gives
+  rmse 0.3108 / cosine 0.995868 for the chunked prefill against the one-token
+  reference (row split: 0.333746 / 0.995312), the first 32 tokens at d16K are
+  bit-identical to the pre-port binary, and with `kGdnChunkedScan = false` the
+  new binary reproduces the old trajectory exactly (same output sha, same
+  drafted/lookup counters) at 72.09 tok/s. So the cell measures where the model
+  ended its turn (`<|im_end|>` near token 80), not decode speed: past the turn
+  the drafts stop being accepted and the rest runs at AR speed (32 ms/token,
+  confirmed by 47.99/44.53/42.27 tok/s at n=96/112/128 and 36.47 at n=256).

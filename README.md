@@ -48,12 +48,16 @@ prefill port):
 | 32,768 | MTP | 1,446.46 | 1,392.54 | 98.41 | 98.43 | -0.0% |
 
 Prefill runs 1.5-4.1% ahead, and loading stays within 1%. The one loss is a
-trajectory artefact, not engine speed: the Q4_1 decode copies shift decode
-numerics, and at 16K the bench pattern stops repeating, so prompt lookup finds
-fewer matches. The prefill port moved those numerics again, so the 16K sequence
-now leaves the pattern sooner and lookup proposes 38 tokens instead of the 77 of
-the previous binary; every unmatched token then costs a full verify step. At 32K
-the trajectories re-converge and the row is at parity.
+trajectory artefact, not engine speed. The chunked prefill shifts decode
+numerics just enough to move a greedy near-tie: at 16K the first 32 generated
+tokens are identical to the pre-port binary, then the sequence diverges and the
+model ends its turn (`<|im_end|>`) around token 80 of the 128-token budget. The
+bench keeps generating past the end of the turn by design, and there the MTP
+drafts stop being accepted, so every remaining token costs a plain
+autoregressive step (32 ms, the AR row's rate) instead of a speculative cycle.
+With the chunked scan disabled the same binary reproduces the previous
+trajectory and 72.09 tok/s at this depth. At 32K the trajectories re-converge
+and the row is at parity.
 
 
 ## Models and benchmarks
