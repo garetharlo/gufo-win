@@ -23,6 +23,7 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
+#include "src/models/qwen38_flash_next/npu_retry.hpp"
 
 namespace gufo::models::qwen38_flash_next::rocm {
 
@@ -177,6 +178,30 @@ public:
       core::SessionMode mode, std::uint32_t max_context,
       std::uint32_t rollback_depth) const noexcept;
   [[nodiscard]] std::size_t DeferredScratchBytes() const;
+
+  /// L-REL-2: before an NPU prefill chunk, copies the state the chunk adds to
+  /// (see npu_retry.hpp) into one executor-owned device buffer, allocated at
+  /// the first call. The copy is enqueued on the stream the chunk runs on; its
+  /// time is read afterwards by NpuRetryBackupMs without a new sync point.
+  /// A failure to set up the buffer is remembered: later calls fail at once
+  /// (retry stays off) and the runtime's sticky error is cleared.
+  [[nodiscard]] bool SaveNpuRetryBackup(Session& session,
+                                        std::string* error_msg) const;
+  /// Puts that state back after a failed chunk of the same session. The copy
+  /// is stream-ordered before the next Forward.
+  [[nodiscard]] bool RestoreNpuRetryBackup(Session& session,
+                                           std::string* error_msg) const;
+  /// Device time of the last SaveNpuRetryBackup copy, once the chunk that
+  /// followed it has synchronized; false if it is not available.
+  [[nodiscard]] bool NpuRetryBackupMs(double* ms) const;
+  /// Bytes of the backup buffer while allocated (0 before the first save and
+  /// after the release).
+  [[nodiscard]] std::size_t NpuRetryBackupAllocatedBytes() const noexcept {
+    return retry_backup_.bytes();
+  }
+  /// Gives the buffer and events back once the NPU is off for the process.
+  /// Drains the stream first; a no-op when nothing is allocated.
+  void ReleaseNpuRetryBackup() const;
 
   enum class ForwardMode { kDecode, kVerify, kPrefill };
 
@@ -435,7 +460,12 @@ private:
                        const float* x, float* out, std::uint32_t n_tokens,
                        bool speculative, std::string* error_msg,
                        bool projections_ready = false,
-                       bool project_output = true) const;
+                       bool project_output = true
+#ifdef GUFO_NPU
+                       ,
+                       bool npu_prefill = false, int layer = -1
+#endif
+  ) const;
   /// `pos`/`first_block` are device values; `start_pos` and `pool_grid`
   /// are their host-side counterparts for the eager-only decisions.
   bool Attention(const DeviceLayer& l, Session::AttentionState& s,
@@ -447,13 +477,23 @@ private:
                  bool project_output = true) const;
   bool Moe(const DeviceLayer& l, const float* x, float* out,
            std::uint32_t n_tokens, std::string* error_msg,
-           bool last_only = false) const;
+           bool last_only = false
+#ifdef GUFO_NPU
+           ,
+           bool npu_prefill = false, int layer = -1
+#endif
+  ) const;
   /// Whether MoeExperts takes the routed F16 WMMA route, whose epilogue the
   /// following combine absorbs (see Moe).
   bool WmmaExperts(const DeviceLayer& l, std::uint32_t n_tokens) const;
   /// Runs routed experts after the router and shared expert are ready.
   bool MoeExperts(const DeviceLayer& l, const float* x, float* out,
-                  std::uint32_t n_tokens, std::string* error_msg) const;
+                  std::uint32_t n_tokens, std::string* error_msg
+#ifdef GUFO_NPU
+                  ,
+                  const std::function<bool()>& finish_shared = {}
+#endif
+  ) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
                 std::uint32_t rows, std::string* error) const;
   /// Whether a draft of `session` requesting the small head gets it.
@@ -510,6 +550,11 @@ private:
   mutable bool unwaited_{false};
   /// Back to the primary stream, after draining the current one if needed.
   [[nodiscard]] bool UsePrimaryStream(std::string* error_msg) const;
+  /// The accumulative state of a session to or from the retry backup buffer
+  /// (npu_retry.hpp lists the regions), in a few batched launches.
+  [[nodiscard]] bool CopyNpuRetryState(Session& session, bool save,
+                                       std::string* error_msg) const;
+
   hipEvent_t counts_ready_{nullptr};
   hipblasHandle_t blas_{nullptr};
   std::unique_ptr<BlasLt> blaslt_;
@@ -618,6 +663,12 @@ private:
   /// Shared transient storage, grown only for penalty-aware verification.
   mutable sampling::TokenPenalty* verification_penalties_{nullptr};
   mutable std::size_t verification_penalty_capacity_{0};
+  /// L-REL-2 backup of one session's accumulative state, shared like the
+  /// forward scratch (one chunk at a time). The host window and the owner
+  /// belong to the backup in the same way.
+  mutable NpuRetryBackupResources retry_backup_;
+  mutable NgramHistory retry_ngram_;
+  mutable const Session* retry_owner_{nullptr};
   /// Allocated only when concurrent decoding is first requested.
   mutable float* batch_logits_{nullptr};
   mutable Session::Control* batch_controls_{nullptr};

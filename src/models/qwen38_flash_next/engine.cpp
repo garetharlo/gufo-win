@@ -22,7 +22,19 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
+#include "src/models/qwen38_flash_next/npu_retry.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
+#ifdef GUFO_NPU
+#include <map>
+#include <string_view>
+
+#include "src/cli/serve/logging.hpp"
+#include "src/core/experimental_authorization.hpp"
+#include "src/models/qwen38_flash_next/npu/server_prefill.hpp"
+#include "src/models/qwen38_flash_next/npu/staging.hpp"
+#include "src/models/qwen38_flash_next/npu/chunk_retry.hpp"
+#include "src/models/qwen38_flash_next/npu/request_stats.hpp"
+#endif
 
 namespace gufo::models::qwen38_flash_next {
 namespace {
@@ -226,9 +238,41 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     }
     m->mtp_weights_ = std::make_unique<MtpWeights>(std::move(*mtp));
   }
+#ifdef GUFO_NPU
+  // Opt-in only: the NPU path computes in 8-bit block floating point and is
+  // not byte-exact, so it starts only for an explicit authorizing switch.
+  std::shared_ptr<npu::ServerPrefill> npu_prefill;
+  if (const char* on = std::getenv("GUFO_NPU_PREFILL");
+      on != nullptr && std::string_view(on) == "1") {
+    try {
+      const auto authorization = core::ExperimentalAuthorization::Granted(
+          core::ExperimentalFeature::Prefill, "GUFO_NPU_PREFILL=1");
+      std::map<std::string, std::string> values;
+      for (const char* name : {"GUFO_NPU_DIR", "GUFO_NPU_SLICES",
+                               "GUFO_NPU_GATE_SLICES", "GUFO_NPU_SHEXP",
+                               "GUFO_NPU_TIMEOUT_MS", "GUFO_NPU_KEEPALIVE",
+                               "GUFO_NPU_KEEPALIVE_MS"}) {
+        if (const char* value = std::getenv(name))
+          values.emplace(name, value);
+      }
+      npu_prefill = std::make_shared<npu::ServerPrefill>(
+          authorization, npu::ParseKnobs(authorization, values));
+      if (!npu_prefill->Start())
+        npu_prefill.reset();
+    } catch (const std::exception& e) {
+      server::Logger::Warn("npu", e.what());
+      npu_prefill.reset();
+    }
+  }
+#endif
   m->device_ = rocm::DeviceModel::Upload(*m->weights_, *m->reader_,
                                          m->mtp_weights_.get(),
-                                         m->mtp_reader_.get(), error_msg);
+                                         m->mtp_reader_.get(), error_msg
+#ifdef GUFO_NPU
+                                         ,
+                                         npu_prefill
+#endif
+  );
   if (!m->device_) {
     return nullptr;
   }
@@ -742,13 +786,24 @@ bool Session::Feed(std::span<const std::int32_t> tokens, std::string* error_msg,
     return false;
   }
   rocm::Executor& exec = *model_->executor_;
+#ifdef GUFO_NPU
+  if (npu::ProcessFailed()) {
+    exec.ReleaseNpuRetryBackup();
+  }
+#endif
   for (std::size_t off = 0; off < tokens.size();) {
     const auto remaining = tokens.size() - off;
     // Fits-through capacity lets a final chunk absorb the 128-token tail.
     const auto capacity = remaining <= exec.max_batch()
                               ? exec.max_batch()
                               : model_->PrefillCapacity();
-    const std::size_t n = std::min<std::size_t>(capacity, remaining);
+    bool npu_on = false;
+#ifdef GUFO_NPU
+    const auto npu_prefill = model_->device_->npu_prefill();
+    npu_on = prefill && npu_prefill && npu_prefill->ready();
+#endif
+    const std::size_t n = npu_on ? std::min<std::size_t>(4096, remaining)
+                                 : std::min<std::size_t>(capacity, remaining);
     const auto chunk = tokens.subspan(off, n);
     if (MtpEnabled() && !tokens_.empty() &&
         !DraftCatchUp(chunk[0], false, error_msg)) {
@@ -763,8 +818,73 @@ bool Session::Feed(std::span<const std::int32_t> tokens, std::string* error_msg,
                                         : model_->PrefillCapacity(),
         rest.size()));
     anchor_candidates_valid_ = false;
-    if (!exec.Forward(*session_, chunk, 1, logits_.data(), mode, error_msg,
-                      /*verify_candidates=*/false, next)) {
+#ifdef GUFO_NPU
+    // L-REL-2: a chunk the NPU may take is backed up so it can run again on the
+    // GPU. Chunks that cannot use a lane (not whole 4096 groups, a hold that
+    // stays on) are not.
+    const auto* pref = npu_on ? npu_prefill.get() : nullptr;
+    bool backed_up = false;
+    if (pref &&
+        npu::ShouldBackupChunk(
+            true,
+            npu::QualifiedChunk(static_cast<unsigned>(n), exec.max_batch()),
+            pref->HoldWillStay())) {
+      std::string backup_error;
+      backed_up = exec.SaveNpuRetryBackup(*session_, &backup_error);
+      static std::atomic<bool> unavailable_logged{false};
+      if (!backed_up && !unavailable_logged.exchange(true)) {
+        server::Logger::Warn("npu",
+                             "GPU retry of a faulted NPU chunk is unavailable: " +
+                                 backup_error);
+      }
+    }
+    const bool failed_before = npu::ProcessFailed();
+    const auto serial_before = pref ? pref->chunk_serial() : 0;
+    const auto noted_before = npu::RequestChunksNoted();
+#endif
+    bool forwarded = exec.Forward(*session_, chunk, 1, logits_.data(), mode,
+                                  error_msg, /*verify_candidates=*/false, next);
+#ifdef GUFO_NPU
+    if (backed_up) {
+      double copy_ms = -1;
+      if (!exec.NpuRetryBackupMs(&copy_ms))
+        copy_ms = -1;
+      const bool used = npu::ChunkUsedThisAttempt(serial_before,
+                                                  pref->chunk_serial(),
+                                                  pref->ChunkUsed());
+      if (used &&
+          npu::BackupBelongsToChunk(noted_before, npu::RequestChunksNoted()))
+        npu::NoteChunkBackup(copy_ms);
+      if (!forwarded &&
+          npu::ShouldRetryChunk(failed_before, npu::ProcessFailed(), used,
+                                true)) {
+        const auto chunk_number =
+            npu::Stats().chunks.load(std::memory_order_relaxed);
+        const auto started = std::chrono::steady_clock::now();
+        std::string retry_error;
+        forwarded = exec.RestoreNpuRetryBackup(*session_, &retry_error);
+        forwarded =
+            forwarded && exec.Forward(*session_, chunk, 1, logits_.data(),
+                                      mode, &retry_error,
+                                      /*verify_candidates=*/false, next);
+        if (forwarded) {
+          npu::Faults().gpu_retries.fetch_add(1, std::memory_order_relaxed);
+          server::Logger::Warn(
+              "npu", npu::FormatChunkRetryWarning(
+                         chunk_number, copy_ms,
+                         std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - started)
+                             .count()));
+        } else if (error_msg) {
+          *error_msg += "; GPU retry failed: " + retry_error;
+        }
+      }
+    }
+    // The NPU is off for the process once it failed: the buffer is dead weight.
+    if (npu::ProcessFailed())
+      exec.ReleaseNpuRetryBackup();
+#endif
+    if (!forwarded) {
       return false;
     }
     hidden_base_ = static_cast<std::uint32_t>(

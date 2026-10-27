@@ -39,6 +39,18 @@ void RestoreGdnState(float* state, RollbackRows snapshots, std::uint32_t keep,
 /// it and the compute queue costs a cross-engine wait.
 void CopyDevice(const float* src, float* dst, std::size_t count,
                 hipStream_t stream);
+/// One region of a batched device-to-device float copy.
+struct CopyRegion {
+  const float* src;
+  float* dst;
+  std::uint64_t count;  ///< floats
+};
+constexpr unsigned kCopyRegionsPerLaunch = 64;
+/// Copies up to kCopyRegionsPerLaunch regions with ONE launch. The region table
+/// travels as kernel arguments (24 bytes a region), so nothing is allocated or
+/// uploaded. Regions are copied 16 bytes at a time when both pointers are
+/// 16-byte aligned, element by element otherwise; they must not overlap.
+void CopyRegions(const CopyRegion* regions, unsigned count, hipStream_t stream);
 /// Copies `bytes` between device memory and pinned host memory
 /// (hipHostMalloc) with a kernel: on this APU the GPU reads and writes the
 /// pinned pages directly, while a host<->device hipMemcpyAsync costs a copy
@@ -267,7 +279,12 @@ bool DenseF16SsmGemm(const void* w, const __half* x, const float* conv_w,
                      const float* history, float* qkvz, float* convolved,
                      std::uint32_t n_tokens, std::uint32_t m, std::uint32_t k,
                      std::uint32_t channels, std::uint32_t kernel,
-                     hipStream_t stream);
+                     hipStream_t stream
+#ifdef GUFO_NPU
+                     ,
+                     std::uint32_t gpu_rows = 0
+#endif
+);
 
 /// Routed expert GEMMs. RoutedCompact sorts the (token, slot) assignments
 /// by expert into `rows_token`/`rows_slot` (RoutedCompactRows(slots,

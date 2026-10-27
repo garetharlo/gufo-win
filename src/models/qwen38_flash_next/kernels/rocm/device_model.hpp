@@ -11,6 +11,14 @@
 #include "src/core/gguf_reader.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
 
+#ifdef GUFO_NPU
+namespace gufo::npu {
+struct LinearZWeights;
+struct ProjectionWeights;
+class ServerPrefill;
+}  // namespace gufo::npu
+#endif
+
 namespace gufo::models::qwen38_flash_next::rocm {
 
 /// One weight resident in device memory, still in its GGUF encoding.
@@ -48,6 +56,12 @@ struct DeviceLayer {
   /// qkv and gate rows stacked ([hidden -> conv channels + value dim]) when
   /// both are Q8_0; then ssm_qkv/ssm_gate are empty.
   DeviceTensor ssm_in;
+#ifdef GUFO_NPU
+  /// XDNA2-resident copy prepared once at upload (see src/npu); null when the
+  /// layer or weights did not qualify.
+  std::shared_ptr<const npu::LinearZWeights> npu_z;
+  std::shared_ptr<const npu::ProjectionWeights> npu_shared;
+#endif
   /// alpha and beta rows stacked: [hidden -> 2 * v_heads] F16.
   DeviceTensor ssm_alpha_beta;
   DeviceTensor attn_q, attn_k, attn_v, attn_out, attn_q_norm, attn_k_norm,
@@ -78,7 +92,18 @@ public:
   [[nodiscard]] static std::unique_ptr<DeviceModel> Upload(
       const ModelWeights& weights, const core::GgufReader& reader,
       const MtpWeights* mtp, const core::GgufReader* mtp_reader,
-      std::string* error_msg = nullptr);
+      std::string* error_msg = nullptr
+#ifdef GUFO_NPU
+      ,
+      std::shared_ptr<npu::ServerPrefill> prefill = {}
+#endif
+  );
+
+#ifdef GUFO_NPU
+  const std::shared_ptr<npu::ServerPrefill>& npu_prefill() const noexcept {
+    return npu_prefill_;
+  }
+#endif
 
   const Config& config() const noexcept { return config_; }
   const DeviceTensor& token_embd() const noexcept { return token_embd_; }
@@ -134,6 +159,9 @@ private:
   std::size_t bytes_{0};
   std::size_t max_half_cols_{1};
   std::size_t max_q8_cols_{32};
+#ifdef GUFO_NPU
+  std::shared_ptr<npu::ServerPrefill> npu_prefill_;
+#endif
 };
 
 }  // namespace gufo::models::qwen38_flash_next::rocm

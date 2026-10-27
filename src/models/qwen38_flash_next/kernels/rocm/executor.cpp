@@ -23,6 +23,14 @@
 #include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/trace.hpp"
+#ifdef GUFO_NPU
+#include "src/cli/serve/logging.hpp"
+#include "src/models/qwen38_flash_next/npu/linear_z.hpp"
+#include "src/models/qwen38_flash_next/npu/linear_z_hip.hpp"
+#include "src/models/qwen38_flash_next/npu/projection.hpp"
+#include "src/models/qwen38_flash_next/npu/request_stats.hpp"
+#include "src/models/qwen38_flash_next/npu/server_prefill.hpp"
+#endif
 
 namespace gufo::models::qwen38_flash_next::rocm {
 namespace {
@@ -41,6 +49,26 @@ bool Check(hipError_t err, const char* what, std::string* error_msg) {
   }
   AssignError(error_msg, std::string(what) + ": " + hipGetErrorString(err));
   return false;
+}
+
+/// The device calls behind the L-REL-2 retry backup buffer and its events.
+NpuRetryBackupOps HipRetryBackupOps() {
+  NpuRetryBackupOps ops;
+  ops.alloc = [](std::size_t bytes) -> void* {
+    void* p = nullptr;
+    return hipMalloc(&p, bytes) == hipSuccess ? p : nullptr;
+  };
+  ops.free = [](void* p) { (void)hipFree(p); };
+  ops.create_event = []() -> void* {
+    hipEvent_t event = nullptr;
+    return hipEventCreate(&event) == hipSuccess ? static_cast<void*>(event)
+                                                : nullptr;
+  };
+  ops.destroy_event = [](void* event) {
+    (void)hipEventDestroy(static_cast<hipEvent_t>(event));
+  };
+  ops.clear_error = [] { (void)hipGetLastError(); };
+  return ops;
 }
 
 /// Allocates `count` elements of T and records the allocation.
@@ -380,6 +408,7 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   e->model_ = &model;
   e->ngram_ = ngram;
   e->options_ = options;
+  e->retry_backup_ = NpuRetryBackupResources(HipRetryBackupOps());
   e->options_.max_batch = std::max<std::uint32_t>(1, options.max_batch);
   e->options_.max_logit_rows = std::clamp<std::uint32_t>(
       options.max_logit_rows, 1, e->options_.max_batch);
@@ -950,6 +979,112 @@ bool Executor::EnsureRollback(Session& session, std::uint32_t depth,
     }
     session.rollback_depth_ = row + 1;
   }
+  return true;
+}
+
+static_assert(kNpuRetryRegionsPerLaunch == kCopyRegionsPerLaunch);
+
+bool Executor::CopyNpuRetryState(Session& session, bool save,
+                                 std::string* error_msg) const {
+  const auto regions = NpuRetryRegions(config());
+  if (!NpuRetryFits(regions.size())) {
+    AssignError(error_msg, "retry backup: too many regions for one backup");
+    return false;
+  }
+  float* buffer = static_cast<float*>(retry_backup_.buffer());
+  std::vector<CopyRegion> table;
+  table.reserve(regions.size());
+  for (const auto& r : regions) {
+    float* live =
+        r.kind == NpuRetryKind::kConv    ? session.linear_[r.layer].conv_state
+        : r.kind == NpuRetryKind::kState ? session.linear_[r.layer].state
+                                         : session.ple_history_;
+    if (live == nullptr) {
+      AssignError(error_msg, "retry backup: session state is not allocated");
+      return false;
+    }
+    float* backup = buffer + r.offset;
+    table.push_back(save ? CopyRegion{live, backup, r.count}
+                         : CopyRegion{backup, live, r.count});
+  }
+  // The whole backup is a few launches (64 regions each), not one per region.
+  for (std::size_t at = 0; at < table.size(); at += kCopyRegionsPerLaunch) {
+    const auto n = static_cast<unsigned>(
+        std::min<std::size_t>(kCopyRegionsPerLaunch, table.size() - at));
+    CopyRegions(table.data() + at, n, stream_);
+    if (!Check(hipGetLastError(),
+               save ? "retry backup copy" : "retry restore copy", error_msg)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Executor::SaveNpuRetryBackup(Session& session,
+                                  std::string* error_msg) const {
+  retry_owner_ = nullptr;
+  if (session.owner_ != this) {
+    AssignError(error_msg, "retry backup: session belongs to another executor");
+    return false;
+  }
+  if (!UsePrimaryStream(error_msg)) {
+    return false;
+  }
+  if (!retry_backup_.Ensure(NpuRetryBackupBytes(config(), true))) {
+    AssignError(error_msg,
+                "retry backup: the buffer could not be set up (retry is off)");
+    return false;
+  }
+  const auto fail = [] {
+    (void)hipGetLastError();
+    return false;
+  };
+  const auto begin = static_cast<hipEvent_t>(retry_backup_.begin_event());
+  const auto end = static_cast<hipEvent_t>(retry_backup_.end_event());
+  if (!Check(hipEventRecord(begin, stream_), "retry backup begin", error_msg) ||
+      !CopyNpuRetryState(session, true, error_msg) ||
+      !Check(hipEventRecord(end, stream_), "retry backup end", error_msg)) {
+    return fail();
+  }
+  retry_ngram_ = session.ngram_;
+  retry_owner_ = &session;
+  return true;
+}
+
+bool Executor::RestoreNpuRetryBackup(Session& session,
+                                     std::string* error_msg) const {
+  if (retry_owner_ != &session || !retry_backup_.allocated()) {
+    AssignError(error_msg, "retry backup: no backup of this session");
+    return false;
+  }
+  if (!UsePrimaryStream(error_msg) ||
+      !CopyNpuRetryState(session, false, error_msg)) {
+    return false;
+  }
+  session.ngram_ = retry_ngram_;
+  return true;
+}
+
+void Executor::ReleaseNpuRetryBackup() const {
+  if (!retry_backup_.allocated()) {
+    return;
+  }
+  // The last restore may still be queued if its chunk never ran.
+  (void)hipStreamSynchronize(primary_stream_);
+  retry_owner_ = nullptr;
+  retry_backup_.Release();
+}
+
+bool Executor::NpuRetryBackupMs(double* ms) const {
+  float elapsed = 0;
+  if (retry_owner_ == nullptr || !retry_backup_.allocated() ||
+      hipEventElapsedTime(
+          &elapsed, static_cast<hipEvent_t>(retry_backup_.begin_event()),
+          static_cast<hipEvent_t>(retry_backup_.end_event())) != hipSuccess) {
+    (void)hipGetLastError();
+    return false;
+  }
+  *ms = elapsed;
   return true;
 }
 
@@ -1924,7 +2059,12 @@ bool Executor::LinearAttention(const DeviceLayer& l, Session::LinearState& s,
                                const float* x, float* out,
                                std::uint32_t n_tokens, bool speculative,
                                std::string* error_msg, bool projections_ready,
-                               bool project_output) const {
+                               bool project_output
+#ifdef GUFO_NPU
+                               ,
+                               bool npu_prefill, int layer
+#endif
+) const {
   const Config& c = config();
   const std::uint32_t channels = c.SsmConvChannels();
   const float* qkv = s_.qkv;
@@ -1932,18 +2072,68 @@ bool Executor::LinearAttention(const DeviceLayer& l, Session::LinearState& s,
   std::uint32_t qkv_stride = channels;
   std::uint32_t z_stride = c.SsmValueDim();
   bool convolved = false;
+#ifdef GUFO_NPU
+  std::unique_ptr<npu::HipLinearZTransfer> npu_transfer;
+  std::unique_ptr<npu::LinearZWork> npu_work;
+  const auto prefill = model_->npu_prefill();
+#endif
   if (!l.ssm_in.empty()) {
     // Wide prefill convolves QKV in the projection's LDS tile. The raw
     // boundary rows remain available for the rolling history update.
     if (!projections_ready && !speculative && WidePrefill(n_tokens) &&
         n_tokens <= options_.max_batch && DenseF16Route(l.ssm_in, n_tokens)) {
       PrepareHalfInput(x, n_tokens, l.ssm_in.cols);
+#ifdef GUFO_NPU
+      if (prefill && prefill->lane_ready() &&
+          npu::LinearZQualified(n_tokens, options_.max_batch, npu_prefill,
+                                speculative, projections_ready,
+                                l.npu_z.get())) {
+        try {
+          npu_transfer = std::make_unique<npu::HipLinearZTransfer>(
+              prefill, static_cast<const std::uint16_t*>(s_.x_half), s_.qkvz,
+              n_tokens, stream_);
+          npu_work = npu::BeginLinearZ(
+              l.npu_z, *npu_transfer, layer,
+              [prefill](auto a, auto b, auto info) {
+                return prefill->session().Dispatch(a, b, std::move(info));
+              },
+              [prefill](std::string error) {
+                prefill->Reject(std::move(error));
+              },
+              [prefill](auto a, const auto& b, const auto& consume) {
+                return prefill->session().DispatchBatch(a, b, consume);
+              });
+        } catch (const std::exception& e) {
+          prefill->Reject(e.what());
+          npu_work.reset();
+          npu_transfer.reset();
+        }
+      }
+#endif
       convolved = DenseF16SsmGemm(
           l.ssm_in.data, static_cast<const __half*>(s_.x_half),
           l.ssm_conv1d.f32(), s.conv_state, s_.qkvz, s_.conv_scratch, n_tokens,
-          l.ssm_in.rows, l.ssm_in.cols, channels, c.ssm_conv_kernel, stream_);
+          l.ssm_in.rows, l.ssm_in.cols, channels, c.ssm_conv_kernel, stream_
+#ifdef GUFO_NPU
+          ,
+          npu_work ? l.npu_z->gpu_rows : 0
+#endif
+      );
+#ifdef GUFO_NPU
+      if (npu_work) {
+        if (!convolved) {
+          prefill->Reject("NPU linear GPU prefix launch rejected");
+          AssignError(error_msg, "NPU linear GPU prefix launch rejected");
+          return false;
+        }
+        convolved = l.npu_z->gpu_rows >= channels;
+      }
+#endif
     }
     if (!projections_ready && !convolved &&
+#ifdef GUFO_NPU
+        !npu_work &&
+#endif
         !Dense(l.ssm_in, x, s_.qkvz, n_tokens, error_msg)) {
       return false;
     }
@@ -1960,8 +2150,25 @@ bool Executor::LinearAttention(const DeviceLayer& l, Session::LinearState& s,
   }
   if (!projections_ready &&
       !Dense(l.ssm_alpha_beta, x, s_.alpha_beta, n_tokens, error_msg)) {
+#ifdef GUFO_NPU
+    if (npu_work)
+      prefill->Reject("GPU alpha/beta failed with linear NPU work pending");
+#endif
     return false;
   }
+#ifdef GUFO_NPU
+  if (npu_work) {
+    // Stream wait, then mapped-C decode, then GDN. The CPU keeps enqueueing;
+    // callback and sticky numerical failures are checked at chunk completion.
+    auto result =
+        npu::FinishLinearZ(*npu_work, *npu_transfer, 16384 - l.npu_z->gpu_rows);
+    if (!result.valid) {
+      prefill->Reject(result.error);
+      AssignError(error_msg, result.error);
+      return false;
+    }
+  }
+#endif
   // Keep the same activation precision across prefill chunk boundaries.
   // The F16 epilogue reuses the F32 output allocation. Switching this
   // projection to Q8 for a short tail changes every subsequent layer.
@@ -2210,7 +2417,12 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
 
 bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
                    std::uint32_t n_tokens, std::string* error_msg,
-                   bool last_only) const {
+                   bool last_only
+#ifdef GUFO_NPU
+                   ,
+                   bool npu_prefill, int layer
+#endif
+) const {
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   // Router logits and the shared-expert gate come out of one GEMM.
@@ -2235,21 +2447,74 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   // routing. Queue its GEMMs after the count download, then prepare the
   // routed dispatch on the CPU without waiting for these GEMMs to finish.
   shexp_half_ready_ = false;
-  if (!GatedDense(l.shexp_up, l.shexp_gate, x, s_.shexp_up, n_tokens,
-                  &l.shexp_down, error_msg)) {
-    return false;
+#ifdef GUFO_NPU
+  const auto prefill = model_->npu_prefill();
+  std::unique_ptr<npu::HipLinearZTransfer> transfer;
+  std::unique_ptr<npu::ProjectionWork> work;
+  if (prefill && prefill->lane_ready() &&
+      npu::ProjectionQualified(n_tokens, options_.max_batch, npu_prefill, false,
+                               false, last_only, l.npu_shared.get())) {
+    try {
+      PrepareHalfInput(x, n_tokens, c.hidden_size);
+      transfer = std::make_unique<npu::HipLinearZTransfer>(
+          prefill, static_cast<const std::uint16_t*>(s_.x_half), s_.shexp_up,
+          n_tokens, stream_, l.npu_shared->rows, 0, s_.shexp_gate);
+      work = npu::BeginProjection(
+          l.npu_shared, *transfer, layer,
+          [prefill](auto a, auto b, auto info) {
+            return prefill->session().Dispatch(a, b, info);
+          },
+          [prefill](auto error) { prefill->Reject(std::move(error)); },
+          [prefill](auto a, const auto& b, const auto& consume) {
+            return prefill->session().DispatchBatch(a, b, consume);
+          });
+    } catch (const std::exception& e) {
+      prefill->Reject(e.what());
+      work.reset();
+      transfer.reset();
+    }
   }
-  if (shexp_half_ready_) {
-    shexp_half_ready_ = false;
-    if (!DenseF16Gemm(l.shexp_down.data, s_.shexp_half, s_.shexp_out, n_tokens,
-                      l.shexp_down.rows, l.shexp_down.cols, stream_)) {
-      AssignError(error_msg, "shared expert F16 GEMM failed");
+  if (!work) {
+#endif
+    if (!GatedDense(l.shexp_up, l.shexp_gate, x, s_.shexp_up, n_tokens,
+                    &l.shexp_down, error_msg)) {
       return false;
     }
-  } else if (!Dense(l.shexp_down, s_.shexp_up, s_.shexp_out, n_tokens,
-                    error_msg)) {
-    return false;
+    if (shexp_half_ready_) {
+      shexp_half_ready_ = false;
+      if (!DenseF16Gemm(l.shexp_down.data, s_.shexp_half, s_.shexp_out, n_tokens,
+                        l.shexp_down.rows, l.shexp_down.cols, stream_)) {
+        AssignError(error_msg, "shared expert F16 GEMM failed");
+        return false;
+      }
+    } else if (!Dense(l.shexp_down, s_.shexp_up, s_.shexp_out, n_tokens,
+                      error_msg)) {
+      return false;
+    }
+#ifdef GUFO_NPU
   }
+  const std::function<bool()> finish_shared = work ? std::function<bool()>([&] {
+    const auto result =
+        npu::FinishProjection(*work, *transfer, 2 * l.npu_shared->rows);
+    if (!result.valid) {
+      prefill->Reject(result.error);
+      AssignError(error_msg, result.error);
+      return false;
+    }
+    // Gate is decoded to shexp_up (the existing gated output scratch), up
+    // to shexp_gate. The first consumer is SwiGLU, before the down projection.
+    SwigluHalf(s_.shexp_up, s_.shexp_gate, s_.shexp_half,
+               std::size_t{n_tokens} * l.npu_shared->rows, stream_);
+    if (!DenseF16Gemm(l.shexp_down.data, s_.shexp_half, s_.shexp_out, n_tokens,
+                      l.shexp_down.rows, l.shexp_down.cols, stream_)) {
+      prefill->Reject("NPU shared down refused");
+      AssignError(error_msg, "NPU shared down refused");
+      return false;
+    }
+    return true;
+  })
+                                                   : std::function<bool()>{};
+#endif
   if (last_only && l.ffn_gate_exps.type == GgmlType::kQ8_0 &&
       l.ffn_up_exps.type == GgmlType::kQ8_0 &&
       l.ffn_down_exps.type == GgmlType::kQ8_0) {
@@ -2270,7 +2535,12 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
       throw;
     }
   }
-  return MoeExperts(l, x, out, n_tokens, error_msg);
+  return MoeExperts(l, x, out, n_tokens, error_msg
+#ifdef GUFO_NPU
+                    ,
+                    finish_shared
+#endif
+  );
 }
 
 bool Executor::WmmaExperts(const DeviceLayer& l, std::uint32_t n_tokens) const {
@@ -2285,8 +2555,12 @@ bool Executor::WmmaExperts(const DeviceLayer& l, std::uint32_t n_tokens) const {
 }
 
 bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
-                          std::uint32_t n_tokens,
-                          std::string* error_msg) const {
+                          std::uint32_t n_tokens, std::string* error_msg
+#ifdef GUFO_NPU
+                          ,
+                          const std::function<bool()>& finish_shared
+#endif
+) const {
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   const std::uint32_t slots = n_tokens * used;
@@ -2297,6 +2571,12 @@ bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
   // into 16-row padded buckets, token rows narrowed to F16 once, then the
   // F16 matrix-core GEMM per (expert, row tile).
   const bool wmma_experts = WmmaExperts(l, n_tokens);
+#ifdef GUFO_NPU
+  // The shared-expert NPU wait lands here, after the routed dispatch is
+  // prepared on the CPU, so the two overlap instead of serialising.
+  if (finish_shared && !finish_shared())
+    return false;
+#endif
   if (wmma_experts) {
     RoutedCompact(s_.ids, s_.expert_counts, s_.routed_bounds, s_.routed_cursors,
                   s_.rows_token, s_.rows_slot, n_tokens, used, c.num_experts,
@@ -2551,6 +2831,12 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
   if (mode == ForwardMode::kPrefill) {
     prefetch_next_ = next;
   }
+#ifdef GUFO_NPU
+  // Resets the per-chunk dispatch bookkeeping: the sticky invalid word is
+  // cleared by the first transfer of each chunk, not once per process.
+  if (mode == ForwardMode::kPrefill && model_->npu_prefill())
+    model_->npu_prefill()->BeginChunk(static_cast<unsigned>(tokens.size()));
+#endif
   const bool speculative = mode == ForwardMode::kVerify;
   PrefillPhase phase(mode == ForwardMode::kPrefill);
   selected_logits_ = nullptr;
@@ -2708,6 +2994,23 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
   if (!ran || (flag_wait && !WaitBumped("forward", error_msg))) {
     return false;
   }
+#ifdef GUFO_NPU
+  // Run already waited for this chunk's stream. Check before publishing
+  // logits, advancing position or committing the engine's token frontier.
+  if (mode == ForwardMode::kPrefill && model_->npu_prefill() &&
+      !npu::CheckHipPrefillChunk(*model_->npu_prefill(), error_msg)) {
+    pinned_inputs.completed = true;
+    return false;
+  }
+#ifdef GUFO_NPU
+  // Per-chunk NPU cost. finish_wait_ms is the time the forward path actually
+  // blocked on the NPU; it is what decides whether the lane pays for itself.
+  if (mode == ForwardMode::kPrefill && model_->npu_prefill()) {
+    if (auto line = npu::TakeRequestLine(); !line.empty())
+      server::Logger::Info("npu", line);
+  }
+#endif
+#endif
   if (traced) {
     Tl().Host(Timeline::kSynced);
     Tl().MaybeReport(stream_);
@@ -2783,7 +3086,12 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
                                 il + 1 == c.num_layers && n_logits == 1;
     if (l.linear) {
       if (!LinearAttention(l, session.linear_[il], s_.mixed, s_.block_out, n,
-                           speculative, error_msg)) {
+                           speculative, error_msg, false, true
+#ifdef GUFO_NPU
+                           ,
+                           WidePrefill(n), static_cast<int>(il)
+#endif
+                           )) {
         return false;
       }
     } else if (!Attention(l, session.attention_[il], s_.mixed, s_.block_out, n,
@@ -2821,7 +3129,12 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
       Combine(s_.res, l.hc_ffn.norm.f32(), rows, InjectWeights(l.hc_ffn));
       if (!HcMix(l.hc_ffn, s_.res, true, s_.mixed, s_.inject, rows, error_msg,
                  false, no_f32) ||
-          !Moe(l, s_.mixed, s_.block_out, rows, error_msg))
+          !Moe(l, s_.mixed, s_.block_out, rows, error_msg
+#ifdef GUFO_NPU
+               ,
+               /*last_only=*/false, WidePrefill(rows), static_cast<int>(il)
+#endif
+               ))
         return false;
       Combine(s_.res, next_norm, rows, next_inject);
       return true;

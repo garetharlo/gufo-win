@@ -14,6 +14,12 @@
 #include "src/core/quant/ggml_dequant.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/mmq/qfn_mmq.h"
+#ifdef GUFO_NPU
+#include "src/cli/serve/logging.hpp"
+#include "src/models/qwen38_flash_next/npu/linear_z.hpp"
+#include "src/models/qwen38_flash_next/npu/projection.hpp"
+#include "src/models/qwen38_flash_next/npu/server_prefill.hpp"
+#endif
 
 namespace gufo::models::qwen38_flash_next::rocm {
 namespace {
@@ -390,7 +396,12 @@ bool DeviceModel::SetDraftVocab(std::uint32_t prefix_rows,
 std::unique_ptr<DeviceModel> DeviceModel::Upload(
     const ModelWeights& w, const core::GgufReader& reader,
     const MtpWeights* mtp, const core::GgufReader* mtp_reader,
-    std::string* error_msg) {
+    std::string* error_msg
+#ifdef GUFO_NPU
+    ,
+    std::shared_ptr<npu::ServerPrefill> prefill
+#endif
+) {
   // The CPU reference also reads Q6_K, but the production embedding, dense
   // and routed kernels do not. Reject it before allocating device weights;
   // the embedding and output head are re-encoded as Q8_0 instead.
@@ -413,6 +424,97 @@ std::unique_ptr<DeviceModel> DeviceModel::Upload(
   }
   std::unique_ptr<DeviceModel> m(new DeviceModel());
   m->config_ = w.config;
+#ifdef GUFO_NPU
+  // Stage before GPU uploads. Only a successfully started authorized service
+  // can be injected; direct model callers default to no capability. A staging
+  // failure disables the NPU lane only: the GPU path still loads the model.
+  // Only the linear-z and shared-expert lanes have call sites; the query/gate
+  // plan would be staged and made resident without ever being dispatched.
+  const bool npu_shapes = w.config.num_layers == 48 &&
+                          w.config.full_attention_interval == 4 &&
+                          w.config.hidden_size == 2560 &&
+                          w.config.SsmConvChannels() == 10240 &&
+                          w.config.SsmValueDim() == 6144;
+  std::vector<std::shared_ptr<const npu::LinearZWeights>> z;
+  std::vector<std::shared_ptr<const npu::ProjectionWeights>> shared;
+  if (prefill && prefill->ready() && npu_shapes) {
+    try {
+      z.resize(w.layers.size());
+      shared.resize(w.layers.size());
+      const auto matrix = [](const TensorRef& t) {
+        return npu::Q8Matrix{
+            t.type,
+            t.rows,
+            t.cols,
+            {static_cast<const std::byte*>(t.data), t.SizeBytes()}};
+      };
+      for (std::size_t i = 0; i < w.layers.size(); ++i) {
+        const auto& l = w.layers[i];
+        // Validate metadata before constructing any byte span/SizeBytes.
+        if (!l.linear || l.ssm_qkv.experts != 1 || l.ssm_gate.experts != 1 ||
+            l.ssm_qkv.empty() || l.ssm_gate.empty() ||
+            l.ssm_qkv.type != core::GgmlType::kQ8_0 ||
+            l.ssm_gate.type != core::GgmlType::kQ8_0 ||
+            l.ssm_qkv.cols != npu::kK || l.ssm_gate.cols != npu::kK ||
+            l.ssm_qkv.rows != 10240 || l.ssm_gate.rows != 6144)
+          continue;
+        z[i] = npu::PrepareLinearZ(matrix(l.ssm_qkv), matrix(l.ssm_gate),
+                                   prefill->knobs().slices);
+      }
+      const auto q8 = [](const TensorRef& t, unsigned rows) {
+        return !t.empty() && t.experts == 1 &&
+               t.type == core::GgmlType::kQ8_0 && t.cols == npu::kK &&
+               t.rows == rows;
+      };
+      for (std::size_t i = 0; i < w.layers.size(); ++i) {
+        const auto& l = w.layers[i];
+        if (w.config.shared_expert_ff > 0 &&
+            w.config.shared_expert_ff <= 1024 &&
+            w.config.shared_expert_ff % 32 == 0 &&
+            q8(l.shexp_gate, w.config.shared_expert_ff) &&
+            q8(l.shexp_up, w.config.shared_expert_ff) &&
+            !l.shexp_down.empty() && l.shexp_down.experts == 1 &&
+            l.shexp_down.type == core::GgmlType::kQ8_0 &&
+            l.shexp_down.rows == 2560 &&
+            l.shexp_down.cols == w.config.shared_expert_ff)
+          shared[i] = npu::PrepareSharedExpert(
+              matrix(l.shexp_gate), matrix(l.shexp_up),
+              prefill->knobs().shared_expert);
+      }
+      for (const auto& weights : z)
+        if (weights)
+          for (const auto& b : weights->b)
+            prefill->session().PrepareWeight(std::as_bytes(std::span(b)));
+      for (const auto& weights : shared)
+        if (weights)
+          for (const auto& b : weights->b)
+            prefill->session().PrepareWeight(std::as_bytes(std::span(b)));
+      server::Logger::Info(
+          "npu", "linear-z qualified layers=" +
+                     std::to_string(std::count_if(
+                         z.begin(), z.end(),
+                         [](const auto& p) { return bool(p); })) +
+                     "; slices=" + std::to_string(prefill->knobs().slices) +
+                     "; shared gate/up qualified layers=" +
+                     std::to_string(std::count_if(
+                         shared.begin(), shared.end(),
+                         [](const auto& p) { return bool(p); })) +
+                     "; other weight shapes and non-full prefill use GPU "
+                     "fallback");
+      m->npu_prefill_ = std::move(prefill);
+    } catch (const std::exception& e) {
+      z.clear();
+      shared.clear();
+      prefill->Reject(e.what());
+      server::Logger::Warn("npu", std::string("linear-z staging failed (") +
+                                      e.what() + "); falling back to the GPU "
+                                      "path");
+    }
+  } else if (prefill && prefill->ready()) {
+    server::Logger::Warn("npu", "model shape not qualified for linear-z; "
+                                "falling back to the GPU path");
+  }
+#endif
   const auto regions = reader.GetMappedRegions();
   std::vector<core::GgufMappedRegion> shards(regions.begin(), regions.end());
   const auto shard_count = static_cast<std::uint32_t>(shards.size());
@@ -453,6 +555,12 @@ std::unique_ptr<DeviceModel> DeviceModel::Upload(
   m->layers_.reserve(w.layers.size());
   for (const auto& l : w.layers) {
     m->layers_.push_back(up.Layer(l));
+#ifdef GUFO_NPU
+    if (m->layers_.size() <= z.size()) {
+      m->layers_.back().npu_z = std::move(z[m->layers_.size() - 1]);
+      m->layers_.back().npu_shared = std::move(shared[m->layers_.size() - 1]);
+    }
+#endif
     if (!up.ok) {
       return nullptr;
     }

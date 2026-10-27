@@ -10,6 +10,9 @@
 #include <type_traits>
 
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
+#ifdef GUFO_NPU
+#include "src/models/qwen38_flash_next/npu/linear_z_geometry.hpp"
+#endif
 
 // HIP kernels follow the layouts and operator formulas in reference.cpp.
 
@@ -6578,16 +6581,40 @@ bool DenseF16SsmGemm(const void* w, const __half* x, const float* conv_w,
                      const float* history, float* qkvz, float* convolved,
                      std::uint32_t n_tokens, std::uint32_t m, std::uint32_t k,
                      std::uint32_t channels, std::uint32_t kernel,
-                     hipStream_t stream) {
+                     hipStream_t stream
+#ifdef GUFO_NPU
+                     ,
+                     std::uint32_t gpu_rows
+#endif
+) {
   if (n_tokens == 0 || m != 16384 || k != 2560 || channels != 10240 ||
       kernel != kSsmConvTaps) {
     return false;
   }
+#ifdef GUFO_NPU
+  const auto launch_rows = npu::LinearZLaunchRows(gpu_rows, m, channels);
+  if (launch_rows == 0)
+    return false;
+  if (launch_rows < channels) {
+    // SLICES 7..12 includes QKV. Write all GPU prefix rows in the original
+    // pitch; defer convolution/boundary reads until the NPU tail is fenced.
+    hipLaunchKernelGGL((DenseF16GEMMKernel<256, 128, 2, 8, 1, 2>),
+                       dim3((n_tokens + 127) / 128, launch_rows / 256),
+                       dim3(kThreads), 0, stream, w, x, qkvz, n_tokens, m, k);
+    return true;
+  }
+#endif
   // Row-tile pairs per token tile in launch order (-0.9 %).
   hipLaunchKernelGGL((DenseF16GEMMKernel<256, 128, 2, 8, 1, 2, false, true>),
-                     dim3((n_tokens + 127) / 128, m / 256), dim3(kThreads), 0,
-                     stream, w, x, qkvz, n_tokens, m, k, nullptr, nullptr,
-                     nullptr, conv_w, convolved);
+                     dim3((n_tokens + 127) / 128,
+#ifdef GUFO_NPU
+                          launch_rows / 256
+#else
+                          m / 256
+#endif
+                          ),
+                     dim3(kThreads), 0, stream, w, x, qkvz, n_tokens, m, k,
+                     nullptr, nullptr, nullptr, conv_w, convolved);
   hipLaunchKernelGGL(
       SsmConvBoundaryKernel,
       dim3(Blocks(channels / 4), (n_tokens + kSsmProjectionTileTokens - 1) /
@@ -6718,6 +6745,48 @@ void CopyDevice(const float* src, float* dst, std::size_t count,
                 hipStream_t stream) {
   hipLaunchKernelGGL(CopyKernel, dim3(Blocks(count)), dim3(kThreads), 0, stream,
                      src, dst, count);
+}
+
+namespace {
+struct CopyRegionTable {
+  CopyRegion regions[kCopyRegionsPerLaunch];
+};
+// Grid (stripes, regions): block row y copies region y, the stripes of a row
+// share it with a grid-stride loop.
+__global__ void CopyRegionsKernel(const CopyRegionTable table) {
+  const CopyRegion region = table.regions[blockIdx.y];
+  const std::size_t stride = std::size_t{gridDim.x} * blockDim.x;
+  const std::size_t first = blockIdx.x * std::size_t{blockDim.x} + threadIdx.x;
+  const bool vector = ((reinterpret_cast<std::uintptr_t>(region.src) |
+                        reinterpret_cast<std::uintptr_t>(region.dst)) &
+                       15) == 0;
+  std::size_t scalar_from = 0;
+  if (vector) {
+    const std::size_t quads = region.count / 4;
+    const auto* in = reinterpret_cast<const float4*>(region.src);
+    auto* out = reinterpret_cast<float4*>(region.dst);
+    for (std::size_t i = first; i < quads; i += stride) {
+      out[i] = in[i];
+    }
+    scalar_from = quads * 4;  // at most three floats are left
+  }
+  for (std::size_t i = scalar_from + first; i < region.count; i += stride) {
+    region.dst[i] = region.src[i];
+  }
+}
+}  // namespace
+
+void CopyRegions(const CopyRegion* regions, unsigned count,
+                 hipStream_t stream) {
+  if (count == 0 || count > kCopyRegionsPerLaunch) {
+    return;
+  }
+  CopyRegionTable table{};
+  for (unsigned i = 0; i < count; ++i) {
+    table.regions[i] = regions[i];
+  }
+  hipLaunchKernelGGL(CopyRegionsKernel, dim3(64, count), dim3(kThreads), 0,
+                     stream, table);
 }
 
 namespace {

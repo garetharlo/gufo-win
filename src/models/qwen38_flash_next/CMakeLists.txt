@@ -5,6 +5,17 @@ add_library(gufo_qwen38_flash_next STATIC
   ngram.cpp
   weights.cpp)
 
+# NPU prefill offload for Strix Halo XDNA2, ported verbatim from
+# haloforge-labs/bubo @ d922839 and gated by cmake/Npu.cmake. Windows x64 only;
+# off by default and absent from the build graph when disabled.
+include(${PROJECT_SOURCE_DIR}/cmake/Npu.cmake)
+if(GUFO_ENABLE_NPU)
+  npu_attach_runtime(gufo_qwen38_flash_next)
+  if(ENGINE_ENABLE_HIP)
+    target_sources(gufo_qwen38_flash_next PRIVATE $<TARGET_OBJECTS:npu_bfp_hip>)
+  endif()
+endif()
+
 target_include_directories(gufo_qwen38_flash_next PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(gufo_qwen38_flash_next PUBLIC gufo_core Threads::Threads)
 
@@ -62,7 +73,7 @@ if (ENGINE_ENABLE_HIP)
   target_compile_definitions(gufo_qwen38_flash_next PRIVATE QFN_ROCM_BUILD=1)
   target_compile_options(gufo_qwen38_flash_next PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-O2>
-    $<$<COMPILE_LANGUAGE:HIP>:-O3;-ffast-math;-fno-finite-math-only;-Wno-unused-command-line-argument>)
+    $<$<COMPILE_LANGUAGE:HIP>:-O3;-ffast-math;-fno-finite-math-only;-Wno-unused-value;-Wno-unused-command-line-argument>)
   target_include_directories(gufo_qwen38_flash_next SYSTEM PUBLIC
     ${HIPCUB_INCLUDE_DIR}
     ${ROCPRIM_INCLUDE_DIR}
