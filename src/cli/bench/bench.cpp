@@ -1268,6 +1268,16 @@ int RunQwen38FlashNextBenchmark(
                                    std::chrono::steady_clock::now() - start)
                                    .count();
         runs.push_back(static_cast<double>(generation_length) / seconds);
+        std::size_t turn_tokens = 0;
+        while (turn_tokens < generated.size() &&
+               !model->IsStopToken(generated[turn_tokens])) {
+          ++turn_tokens;
+        }
+        if (turn_tokens < generated.size()) {
+          std::cerr << "tg depth=" << depth << " ended its turn after "
+                    << turn_tokens << " of " << generation_length
+                    << " tokens; the rest is post-turn text\n";
+        }
         if (options.verbose) {
           const auto stats = session->Statistics();
           std::cerr << "Qwen3.8-Flash-Next tg depth=" << depth

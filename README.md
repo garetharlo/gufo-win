@@ -51,13 +51,13 @@ Prefill runs 1.5-4.1% ahead, and loading stays within 1%. The one loss is a
 trajectory artefact, not engine speed. The chunked prefill shifts decode
 numerics just enough to move a greedy near-tie: at 16K the first 32 generated
 tokens are identical to the pre-port binary, then the sequence diverges and the
-model ends its turn (`<|im_end|>`) around token 80 of the 128-token budget. The
-bench keeps generating past the end of the turn by design, and there the MTP
-drafts stop being accepted, so every remaining token costs a plain
-autoregressive step (32 ms, the AR row's rate) instead of a speculative cycle.
-With the chunked scan disabled the same binary reproduces the previous
-trajectory and 72.09 tok/s at this depth. At 32K the trajectories re-converge
-and the row is at parity.
+model ends its turn (`<|im_end|>`) after token 36 of the 128-token budget. The
+bench keeps generating past the end of the turn by design, so the remaining 92
+tokens are post-turn text, where MTP acceptance collapses and the row settles at
+the autoregressive rate. `gufo bench` now prints `ended its turn after N of M
+tokens` for exactly that case. With the chunked scan disabled the same binary
+reproduces the previous trajectory and 72.09 tok/s at this depth. At 32K the
+trajectories re-converge and the row is at parity.
 
 
 ## Models and benchmarks

@@ -96,6 +96,15 @@ so every overlap stage is measured on tg too.
   bit-identical to the pre-port binary, and with `kGdnChunkedScan = false` the
   new binary reproduces the old trajectory exactly (same output sha, same
   drafted/lookup counters) at 72.09 tok/s. So the cell measures where the model
-  ended its turn (`<|im_end|>` near token 80), not decode speed: past the turn
+  ended its turn (`<|im_end|>` after token 36), not decode speed: past the turn
   the drafts stop being accepted and the rest runs at AR speed (32 ms/token,
   confirmed by 47.99/44.53/42.27 tok/s at n=96/112/128 and 36.47 at n=256).
+- 2026-10-27: decided not to make the bench stop at the end of the turn.
+  `DecodeStep(..., stop_at_eos = true)` returns `stop` without advancing the
+  session, so the loop cannot continue, and the AR depth rows end their turn on
+  the first token at 16K/32K (`engine.cpp:1185-1188`), which would leave two
+  table cells with no timed tokens. A budget of 32 tokens with `stop_at_eos`
+  true times the turn only (76.76 tok/s at d16K MTP, against 78.40 upstream) but
+  changes the method for one cell. Instead `gufo bench` keeps the 128-token
+  window and now prints `ended its turn after N of M tokens; the rest is
+  post-turn text`, so the artefact is visible in every future run.
