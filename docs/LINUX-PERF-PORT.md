@@ -1553,14 +1553,15 @@ Checked 2026-10-26, deprioritized to near-zero:
   solutions generally want tens of MB of workspace, which changes K-reduction
   order and breaks the bit-identical acceptance rule.
 
-### [ ] Bubo NPU prefill offload (big-ticket, deferred)
+### [x] Bubo NPU prefill offload (big-ticket) - DONE 2026-10-27
 
 `bubo src/npu/` (~30 files, adapted from the MIT fork `mikealanni/gufo`):
 offloads eligible Q8_0 projections in complete 4096-token prefill groups to
 XDNA2 through a persistent XRT context (BFP codec, pinned xclbin artifacts,
-`GUFO_NPU_*` environment). Only worth starting if prefill beyond ~1.6k tok/s
-is the goal; it is a subsystem needing XRT and real-hardware calibration, not
-a patch.
+`GUFO_NPU_*` environment). Synced to bubo tip `51d14955` in one pass (commit
+`83dd5da3`): module, L-REL-2 GPU chunk retry, fault/guard stack, tests and
+docs — see `docs/npu.md` and `docs/WINDOWS-DEV.md`. Remaining: real-hardware
+prefill-offload calibration on the NPU box.
 
 ### Already covered or not applicable
 
@@ -1622,7 +1623,7 @@ portable; details per repo:
   gfx1151 items besides the closed tuning table (dense MMQ +0.2%, shared-expert
   stream ±0.1%) are measured-neutral there.
 - **haloforge-labs/bubo**: no new commits since 2026-10-13; V2K stays rejected,
-  NPU offload stays the only big-ticket deferred item.
+  NPU offload sync landed 2026-10-27 (see the DONE entry above).
 - **jesdga95/basalt**: 18 new commits, all CUDA sm_120: multi-card expert
   tiering, peer-GPU KV lending, per-card prefill pipelines. Their "one copy of
   window tokens/steps/positions" H2D batching targets PCIe latency; on unified
@@ -1648,5 +1649,5 @@ portable; details per repo:
   port. The `ggml-ork` part (tip `2d6caf8`) stays wrong hardware (RK3588 NPU).
 - **ikawrakow/ik_llama.cpp**: unchanged verdict; CPU/TBLAS focus.
 
-Net: zero ports today. The only remaining external lever is the Bubo NPU
-prefill offload, unchanged from 2026-10-25.
+Net: zero ports today; the Bubo NPU prefill offload was synced on 2026-10-27
+(and still needs real-hardware calibration).

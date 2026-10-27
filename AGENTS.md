@@ -4,6 +4,8 @@
 
 Production targets Linux x86-64 AMD Strix Halo (`gfx1151`) only. CMake owns
 compiler flags, dependencies and installation; Nix supplies the pinned toolchain.
+Windows host equivalents (HIP toolchain flags, vcpkg, NPU/XRT tooling root,
+model cache paths, quick-bench command): [docs/WINDOWS-DEV.md](docs/WINDOWS-DEV.md).
 Linux source-build prerequisites are in [README.md](README.md#build-from-source).
 
 ```sh
