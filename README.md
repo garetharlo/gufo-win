@@ -35,21 +35,25 @@ with error bars and settings:
 
 Against upstream 0.24.0 (the stock `gufo` release binary, same files, same
 direct `gufo bench` calls, greedy, two repetitions, one process per mode,
-2026-10-25; Gufo re-run 2026-10-26):
+NPU off, 2026-10-25; Gufo re-run 2026-10-27 after the chunked-DeltaNet
+prefill port):
 
 | Depth | Mode | Gufo pp (tok/s) | upstream pp | Gufo tg (tok/s) | upstream tg | Gain tg |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| 0 | AR | 1,650.36 | 1,684.74 | 35.44 | 27.68 | **+28.1%** |
-| 16,384 | AR | 1,470.40 | 1,465.02 | 32.96 | 28.20 | **+16.9%** |
-| 32,768 | AR | 1,440.37 | 1,443.87 | 31.87 | 28.54 | **+11.7%** |
-| 0 | MTP | 1,629.86 | 1,631.13 | 60.77 | 35.51 | **+71.1%** |
-| 16,384 | MTP | 1,435.42 | 1,413.58 | 76.37 | 78.40 | -2.6% |
-| 32,768 | MTP | 1,413.94 | 1,392.54 | 98.38 | 98.43 | -0.1% |
+| 0 | AR | 1,710.08 | 1,684.74 | 35.43 | 27.68 | **+28.0%** |
+| 16,384 | AR | 1,512.37 | 1,465.02 | 32.74 | 28.20 | **+16.1%** |
+| 32,768 | AR | 1,487.24 | 1,443.87 | 31.62 | 28.54 | **+10.8%** |
+| 0 | MTP | 1,656.11 | 1,631.13 | 60.82 | 35.51 | **+71.3%** |
+| 16,384 | MTP | 1,471.97 | 1,413.58 | 43.12 | 78.40 | -45.0% |
+| 32,768 | MTP | 1,446.46 | 1,392.54 | 98.41 | 98.43 | -0.0% |
 
-Prefill stays within ±2% and loading within 1%. The one loss is a trajectory
-artefact, not engine speed: the Q4_1 decode copies shift decode numerics, and
-at 16K the bench pattern stops repeating, so prompt lookup finds fewer matches
-than upstream. At 32K the trajectories re-converge and the row is at parity.
+Prefill runs 1.5-4.1% ahead, and loading stays within 1%. The one loss is a
+trajectory artefact, not engine speed: the Q4_1 decode copies shift decode
+numerics, and at 16K the bench pattern stops repeating, so prompt lookup finds
+fewer matches. The prefill port moved those numerics again, so the 16K sequence
+now leaves the pattern sooner and lookup proposes 38 tokens instead of the 77 of
+the previous binary; every unmatched token then costs a full verify step. At 32K
+the trajectories re-converge and the row is at parity.
 
 
 ## Models and benchmarks
