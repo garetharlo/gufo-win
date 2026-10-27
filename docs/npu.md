@@ -19,9 +19,19 @@ Gufo can send part of the prompt processing (prefill) to the Ryzen AI NPU while 
 ## Turn it on or off
 
 - Off: `GUFO_NPU_PREFILL` unset or not `1` (the default).
-- On: set `GUFO_NPU_PREFILL=1` for the server process.
+- On: set `GUFO_NPU_PREFILL=1` for the server process, and set
+  `GUFO_NPU_DIR` to the folder that holds the kernel files when it is not
+  `bin\..\tools\npu` (a source build keeps them in `tools\npu`, so set it).
+  Without usable files Gufo writes one warning and uses the GPU.
 - The attention q/gate lane is off by default. Turn it on with the environment variable `GUFO_NPU_GATE_SLICES` (1 to 12).
 - The shared-expert lane turns itself on with the attention classes it can handle.
+- The power and memory guard is on by default (`GUFO_NPU_GUARD` accepts
+  `on`, `off` or `log`). It holds the NPU for 600 s when three consecutive
+  chunks average above 82 W, and it reads whole-chip power, so a host whose
+  GPU prefill alone exceeds 82 W holds the NPU after three chunks. Measured
+  on a 32 GB BOSGAME host: NPU 1563 tok/s against 1608 for the GPU alone at
+  `pp8192`, 1528 with the guard off, so the holds reduce the loss; the
+  offload only pays off when the NPU beats the GPU for its own slices.
 
 ## NPU power mode
 

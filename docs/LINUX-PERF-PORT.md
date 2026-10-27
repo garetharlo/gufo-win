@@ -1560,8 +1560,23 @@ offloads eligible Q8_0 projections in complete 4096-token prefill groups to
 XDNA2 through a persistent XRT context (BFP codec, pinned xclbin artifacts,
 `GUFO_NPU_*` environment). Synced to bubo tip `51d14955` in one pass (commit
 `83dd5da3`): module, L-REL-2 GPU chunk retry, fault/guard stack, tests and
-docs — see `docs/npu.md` and `docs/WINDOWS-DEV.md`. Remaining: real-hardware
-prefill-offload calibration on the NPU box.
+docs — see `docs/npu.md` and `docs/WINDOWS-DEV.md`.
+
+Calibrated 2026-10-27 on the 32 GB BOSGAME host (UD-Q4_K_XL, `-p 8192 -n 1
+-r 1 --temperature 0 --speculative off`, AR, one process at a time):
+GPU-only 1608.09 tok/s, NPU guard-on 1563.61 (Default pmode) and 1558.65
+(`xrt-smi configure --pmode performance`), NPU guard-off 1527.68, and the
+installed bubo 0.1.0 package 1520.89 on the same file and arguments. The
+offload is a net loss on this host in every configuration, so there is no
+NPU gap to close against bubo: the NPU is slower than the GPU for its own
+slices (about 2.6 s per 4096-token chunk, `hostfunc_lat_ms` 3.4 s, package
+power 85–113 W while the GPU draws the rest) and competes for the same
+package budget. The guard's 82 W x3 envelope trips after three chunks
+because it reads whole-chip RAPL, which prefill exceeds with the NPU idle;
+holds therefore limit the loss rather than the gain. PMODE makes no
+difference. The engine forwarded only 7 of the module's `GUFO_NPU_*`
+knobs; `GUFO_NPU_GUARD`, `HAL_MONITOR`, `CHIP_POWER` and `MEM_TRACE` are
+now read too, matching bubo's serve wiring.
 
 ### Already covered or not applicable
 

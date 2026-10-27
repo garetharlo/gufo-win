@@ -251,7 +251,9 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
       for (const char* name : {"GUFO_NPU_DIR", "GUFO_NPU_SLICES",
                                "GUFO_NPU_GATE_SLICES", "GUFO_NPU_SHEXP",
                                "GUFO_NPU_TIMEOUT_MS", "GUFO_NPU_KEEPALIVE",
-                               "GUFO_NPU_KEEPALIVE_MS"}) {
+                               "GUFO_NPU_KEEPALIVE_MS", "GUFO_NPU_GUARD",
+                               "GUFO_NPU_HAL_MONITOR", "GUFO_NPU_CHIP_POWER",
+                               "GUFO_NPU_MEM_TRACE"}) {
         if (const char* value = std::getenv(name))
           values.emplace(name, value);
       }
