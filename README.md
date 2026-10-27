@@ -55,9 +55,11 @@ model ends its turn (`<|im_end|>`) after token 36 of the 128-token budget. The
 bench keeps generating past the end of the turn by design, so the remaining 92
 tokens are post-turn text, where MTP acceptance collapses and the row settles at
 the autoregressive rate. `gufo bench` now prints `ended its turn after N of M
-tokens` for exactly that case. With the chunked scan disabled the same binary
-reproduces the previous trajectory and 72.09 tok/s at this depth. At 32K the
-trajectories re-converge and the row is at parity.
+tokens` for exactly that case. Timed only up to the turn end the same cell runs
+at 76.76 tok/s against upstream's 78.40 (-2%), so in-turn MTP speed is
+unchanged. With the chunked scan disabled the same binary reproduces the
+previous trajectory and 72.09 tok/s at this depth. At 32K the trajectories
+re-converge and the row is at parity.
 
 
 ## Models and benchmarks
