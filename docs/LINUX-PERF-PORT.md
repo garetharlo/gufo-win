@@ -14,9 +14,8 @@ TheRock ROCm 10.0.0 / clang 23 toolchain used for the Windows build.
 
 - Upstream: <https://github.com/gufo-org/gufo>
 - Review clone: `%TEMP%\opencode\gufo-upstream` (bare clone works; fetch +
-  `git show <sha>`). Last swept upstream `5eedd09` (2026-10-25) on 2026-10-25,
-  see "Sweep 2026-10-25" and the second pass inside "External repos survey
-  2026-10-25"
+  `git show <sha>`). Last swept upstream `16e8ed47` (2026-10-26) on 2026-10-26,
+  see "External repos survey 2026-10-26"
 - Local base: upstream `fee9d2a` (PR #314 fix)
 - Local Windows HEAD at review: `c85aada`
 - Local fork already has Windows-specific work in
@@ -1523,7 +1522,7 @@ activations, 82 KiB scratch). Ported and A/B'd 2026-10-26 (`bench -p 1 -n 128
 MIT kernel for a default-off branch, and the only gate was byte-identical
 output with the switch off, so it was reverted. Bubo also defaults it off.
 
-### [ ] Strata hipBLASLt tuning tables for gfx1151
+### [-] Strata hipBLASLt tuning tables for gfx1151 — closed 2026-10-26
 
 `niko1221/strata` bakes per-shape hipBLASLt solution IDs
 (`src/prefill/hipblaslt_tuning.hpp`, `STRATA_HIPBLASLT_TUNING_V1`) and ships a
@@ -1532,9 +1531,27 @@ measured gfx1151 table for Qwen3.8-Flash-Next under
 This fork's `qwen38_flash_next/kernels/rocm/blaslt.cpp` takes heuristic
 candidate 0 of 16. Port = pin known solution IDs when the arch family and
 hipBLASLt version match, validate with `matmulIsAlgoSupported`, fall back to
-the heuristic otherwise. Verify the table's hipBLASLt version against our
-TheRock build before expecting any win. Do not port their kernels directly;
-they are CUDA `.cu` (the V2K port above is the already-adapted path).
+the heuristic otherwise. Do not port their kernels directly; they are CUDA
+`.cu` (the V2K port above is the already-adapted path).
+
+Checked 2026-10-26, deprioritized to near-zero:
+
+- Version mismatch confirmed: their table targets hipBLASLt **1.5.0** / HIP
+  runtime `7.17.26392` (`prefill-ab.md`); this build links
+  `build/release/libhipblaslt.dll` **1.4.1** (ROCm 7.15.26333). Their header
+  gate rejects a mismatched table, and solution IDs are not transferable
+  across hipBLASLt versions. Porting the table as-is is impossible; the real
+  port would be their tuner (`tools/hip/tune_hipblaslt.cpp`) to regenerate a
+  table on our 1.4.1.
+- Their headline is not our gap: the tuning table took *their* engine from 251
+  to 529 pp tok/s because its default was plain hipBLAS. This fork already
+  does pp1023 ≈ 1400 / pp2048 ≈ 1543 tok/s, and routes its largest GEMMs to
+  own kernels (`OwnF16`/`OwnBf16`), so the pool of shapes a tuned hipBLASLt
+  could fix is small. Their dense MMQ (+0.2%) and shared-expert stream
+  (±0.1%) arms were measured neutral too.
+- Our plans require `workspace == 0` for determinism; the fast hipBLASLt
+  solutions generally want tens of MB of workspace, which changes K-reduction
+  order and breaks the bit-identical acceptance rule.
 
 ### [ ] Bubo NPU prefill offload (big-ticket, deferred)
 
@@ -1583,3 +1600,53 @@ Rejected as not worth changing: `MtpAcceptEstimate`'s linear bin scan and
 `MtpLengthState::Observe`'s per-token loop (8 and ~30 elements, negligible);
 `LatinTextVocabulary` (one-shot load-time vocab filter); `PlatformTuning()`
 per-step calls (Meyers singleton, a load + branch, no measurable gain).
+
+## External repos survey 2026-10-26
+
+Re-fetched all eight repos under `%TEMP%\opencode\portscan`. Nothing new is
+portable; details per repo:
+
+- **gufo-org/gufo** `5eedd09..16e8ed47` (10 commits): nothing to port.
+  `f465f15f` (#805, "preserve concurrent cached PLE reads") is the only
+  Windows item: upstream's `ReadAt` issued overlapped `ReadFile` without an
+  `hEvent`, so a cached read that went `ERROR_IO_PENDING` could not be waited
+  on safely. This fork's `compat/win32/posix.cpp` `pread` path already sets a
+  thread-local manual-reset event, resets it before each call, and waits with
+  `GetOverlappedResult`; ngram already opens `O_CONCURRENT_RANDOM`. Covered.
+  `1b8ad798` (#773, stable prompt-cache boundary after system prompts) was
+  **reverted the same day** by `24796139` — do not chase. The rest is the
+  `/embeddings` endpoint (#813), image `detail` bounding (#774), embedding
+  truncation (#765), gcc16 include fix (#782), and CI. Next sweep from
+  `16e8ed47` (v0.25.0).
+- **niko1221/strata**: no new commits since `4b9e05a`. Their remaining
+  gfx1151 items besides the closed tuning table (dense MMQ +0.2%, shared-expert
+  stream ±0.1%) are measured-neutral there.
+- **haloforge-labs/bubo**: no new commits since 2026-10-13; V2K stays rejected,
+  NPU offload stays the only big-ticket deferred item.
+- **jesdga95/basalt**: 18 new commits, all CUDA sm_120: multi-card expert
+  tiering, peer-GPU KV lending, per-card prefill pipelines. Their "one copy of
+  window tokens/steps/positions" H2D batching targets PCIe latency; on unified
+  Strix Halo memory there is no such copy. Not applicable.
+- **wallawalla47/infernix**: 24 new commits, all CUDA (sm_100/120). Only
+  conceptually interesting item is `0f5707c`/`070b91f` "gdn tree closed form"
+  (analytic parallel scan over MTP draft trees for the recurrent state,
+  dropping per-draft sequential updates): +35% tg on their 35B, but −6% to −31%
+  on several others (their own numbers), warp-intrinsic CUDA, and needs a
+  correct associative delta-rule composition — a research kernel, not a port.
+  Watch list only.
+- **kaelow/qwenllama.cpp**: unchanged verdict; last commit 2026-08-31, tracks
+  upstream llama.cpp (BeeLlama merge), no AMD/gfx1151 work.
+- **oRKLLM/llama.cpp-rockchip**: corrected 2026-10-26 after re-checking the
+  tree — this is not NPU-only. `origin/master` carries a second lineage: the
+  **TurboQuant+** llama.cpp fork (`TheTom/llama-cpp-turboquant`) with lossy
+  KV/weight codecs `TQ3_1S`/`TQ4_1S` (Walsh-Hadamard rotated polar quant,
+  claimed ~4.6x KV compression at ~1% PPL). Verified `TQ4_1S` kernels exist
+  only for CUDA (`mmvq-tq.cu`), Vulkan (`mul_mat_vec_tq4_1s.comp`) and SYCL —
+  no HIP path to adapt, and gufo is not llama.cpp regardless. A lossy KV codec
+  is a capacity feature that changes KV values, so it fails the
+  bit-identical acceptance rule by construction; out of scope as a performance
+  port. The `ggml-ork` part (tip `2d6caf8`) stays wrong hardware (RK3588 NPU).
+- **ikawrakow/ik_llama.cpp**: unchanged verdict; CPU/TBLAS focus.
+
+Net: zero ports today. The only remaining external lever is the Bubo NPU
+prefill offload, unchanged from 2026-10-25.
