@@ -1717,3 +1717,39 @@ One performance item to port, and it targets the one metric that is behind:
   `ec4aacba`, `5efd8b77`, `c811b451`).
 
 Next sweep from `9974cb4c`.
+
+## Upstream fix 2026-10-27 (`c92b19c5` #850, 1 commit)
+
+A quality fix, not a performance one, and it takes back item 2 of #758:
+
+- `[x]` **`c92b19c5` "remove lossy chunked DeltaNet prefill"** — landed here in
+  upstream's shape: `GdnChunkPrepKernel`, `GdnChunkScanKernel`, the fused gated
+  norm, `kGdnChunk*`, `GdnChunkedScanAvailable()` and the chunked branch of
+  `GatedDeltaNet` are deleted (`kernels.hip.cpp` −571 lines, one inserted);
+  `kernels.hpp` loses the declaration and the chunked wording of the `z_ready`
+  doc; `gdn_ops_test` drops `RunChunkedCase` and its three widths. The row
+  split, the W8A8 tiles, the `z_ready` wait and the epilogue stay.
+  Upstream's reason: the scan's F16 Q/K/T/P operands put the layer error 500×
+  above the F32 recurrence (2.6e-4 vs 5.1e-7 relative RMS), chat-prompt NLL
+  +0.0145, and a 299-token tool prompt raised the `<` vs `Hello` gap to 1.4
+  nats, so a `literal_protocol_raw_xml` case answered "Hello! I'm here to
+  help…" at temperature 0 where llama.cpp b11382 echoes the literal. About 4%
+  of prefill does not buy that.
+  Local cost (Windows release, UD-Q4_K_XL + shared MTP, `-p 512,2048 -n 64
+  -r 3 --speculative mtp`, two alternated rounds): pp512 1,181/1,195 →
+  1,179/1,174 (−0.9%), pp2048 1,596/1,596 → 1,576/1,546 (−2.2%), tg64
+  52.7/53.4 → 53.3/53.3 (noise). `--validate-prefill` at 512/1024/2048 does
+  not move (rmse 1.1985/0.3378/0.3781 → 1.2065/0.3506/0.3487, cosine 0.962/
+  0.993/0.993 → 0.955/0.992/0.994): the batched-vs-sequential gap at that
+  length is the attention batching difference, not the recurrence, so it is a
+  regression gate only. Greedy (`--speculative mtp`, `-n 48 -t 0`) is scoped as
+  expected: a 70-token and a 115-token prompt are byte-identical across the two
+  exes, a ~1.1K-token doc-continuation prompt diverges in its first reasoning
+  tokens, and a ~1.1K-token tool prompt happens to agree. So the fork does not
+  reproduce upstream's `literal_protocol_raw_xml` flip on this quant/template,
+  but its prefill arithmetic does change for long prompts.
+- Consequence: item 3 of #758 (side streams) is the remaining lossless prefill
+  candidate; upstream measured it at 1,331/1,855/1,916 against 1,286/1,858/1,909
+  with the scan gone (+3.3% pp512, neutral pp2048, +0.4% pp4096).
+
+Next sweep from `c92b19c5`.

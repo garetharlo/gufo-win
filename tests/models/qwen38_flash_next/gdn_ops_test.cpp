@@ -569,98 +569,6 @@ int RunCase(std::uint32_t kTokens, bool extreme_gates = false) {
   }
 }
 
-/// The chunked WMMA recurrence (row_split with n >= 256 on Clang 23+ builds)
-/// against the per-token F32 kernel, and its fused gated-norm output.
-int RunChunkedCase(std::uint32_t kTokens) {
-  const std::size_t kQkvCount = static_cast<std::size_t>(kTokens) * kChannels;
-  const std::size_t kStateCount =
-      static_cast<std::size_t>(kVHeads) * kDim * kDim;
-  const std::size_t kConvState =
-      static_cast<std::size_t>(kKernel - 1) * kChannels;
-  const std::size_t kQn = static_cast<std::size_t>(kTokens) * kKHeads * kDim;
-  const std::size_t kOut = static_cast<std::size_t>(kTokens) * kZ;
-  const auto qkv = MakeValues(kQkvCount, 0x1234ABCDU, 1.0F);
-  const auto z = MakeValues(kOut, 0x0BADF00DU, 2.0F);
-  const auto alpha_beta = MakeValues(
-      static_cast<std::size_t>(kTokens) * 2 * kVHeads, 0xBADC0FFEU, 2.0F);
-  const auto conv_w = MakeValues(static_cast<std::size_t>(kChannels) * kKernel,
-                                 0xDEADBEEFU, 0.5F);
-  const auto a = MakeValues(kVHeads, 0xC0FFEE11U, 1.0F, -1.5F);
-  const auto dt = MakeValues(kVHeads, 0xFEEDFACEU, 1.0F);
-  const auto norm_w = MakeValues(kDim, 0x600DCAFEU, 0.5F, 1.0F);
-  const auto conv_state = MakeValues(kConvState, 0x13579BDFU, 1.0F);
-  const auto state = MakeValues(kStateCount, 0x2468ACE0U, 0.1F);
-
-  HipBuffer<float> d_qkv(kQkvCount);
-  HipBuffer<float> d_z(kOut);
-  HipBuffer<float> d_alpha_beta(alpha_beta.size());
-  HipBuffer<float> d_conv_w(conv_w.size());
-  HipBuffer<float> d_a(kVHeads);
-  HipBuffer<float> d_dt(kVHeads);
-  HipBuffer<float> d_norm_w(kDim);
-  HipBuffer<float> d_scratch(static_cast<std::size_t>(kTokens + kKernel) *
-                             kChannels);
-  HipBuffer<float> d_qn(kQn);
-  HipBuffer<float> d_kn(kQn);
-  HipBuffer<float> d_raw(kOut);
-  HipBuffer<float> d_conv_state(kConvState);
-  HipBuffer<float> d_state(kStateCount);
-  HipBuffer<float> d_out(kOut);
-  Upload(&d_qkv, qkv);
-  Upload(&d_z, z);
-  Upload(&d_alpha_beta, alpha_beta);
-  Upload(&d_conv_w, conv_w);
-  Upload(&d_a, a);
-  Upload(&d_dt, dt);
-  Upload(&d_norm_w, norm_w);
-  const auto forward = [&](bool chunked, __half* out_half) {
-    Upload(&d_conv_state, conv_state);
-    Upload(&d_state, state);
-    if (!q::GatedDeltaNet(d_qkv.get(), kChannels, d_z.get(), kZ,
-                          d_alpha_beta.get(), d_conv_w.get(), d_a.get(),
-                          d_dt.get(), d_norm_w.get(), d_conv_state.get(),
-                          d_scratch.get(), d_qn.get(), d_kn.get(), d_raw.get(),
-                          d_state.get(), out_half ? nullptr : d_out.get(),
-                          nullptr, {}, {}, kTokens, kKHeads, kVHeads, kDim,
-                          kKernel, chunked, false, kEps, nullptr, out_half))
-      throw std::runtime_error("chunked GDN launch failed");
-    CheckHip(hipDeviceSynchronize(), "chunked GDN synchronization");
-  };
-  // F16 operands: the chunked route agrees with the F32 kernel to F16
-  // rounding of the inputs, relative to each tensor's RMS (measured 1.0e-2 to
-  // 1.7e-2 at n = 256, 300 and 1,030; indexing errors give O(1)).
-  constexpr double kTolerance = 5e-2;
-  forward(false, nullptr);
-  const auto ref_out = Download(&d_out, kOut);
-  const auto ref_state = Download(&d_state, kStateCount);
-  forward(true, nullptr);
-  const auto out = Download(&d_out, kOut);
-  const auto final_state = Download(&d_state, kStateCount);
-  const double out_error = WorstOverRms(ref_out, out);
-  const double state_error = WorstOverRms(ref_state, final_state);
-  std::cout << "chunked n=" << kTokens << ": output " << out_error << ", state "
-            << state_error << " over RMS";
-
-  // The gated norm fused into the scan: compact F16 rows against the F32
-  // epilogue's rows. The state stays the one the raw-row pass produced.
-  const std::size_t half_count = static_cast<std::size_t>(kTokens) * kZ;
-  HipBuffer<__half> d_half(half_count);
-  forward(true, d_half.get());
-  std::vector<__half> half(half_count);
-  CheckHip(hipMemcpy(half.data(), d_half.get(), d_half.bytes(),
-                     hipMemcpyDeviceToHost),
-           "fused half output");
-  std::vector<float> fused(kOut);
-  for (std::size_t i = 0; i < half_count; ++i)
-    fused[i] = __half2float(half[i]);
-  if (std::memcmp(Download(&d_state, kStateCount).data(), final_state.data(),
-                  kStateCount * sizeof(float)))
-    throw std::runtime_error("fused GDN output changed the state");
-  const double fused_error = WorstOverRms(ref_out, fused);
-  std::cout << ", fused output " << fused_error << '\n';
-  return std::max({out_error, state_error, fused_error}) > kTolerance ? 1 : 0;
-}
-
 }  // namespace
 
 int main() {
@@ -675,16 +583,6 @@ int main() {
     }
     if (RunCase(1, true) != 0 || RunCase(8, true) != 0)
       return 1;
-    // Full, ragged and long chunked passes; Clang 22 builds keep the row
-    // split for every length.
-    if (q::GdnChunkedScanAvailable()) {
-      for (std::uint32_t n : {256u, 300u, 1030u}) {
-        if (RunChunkedCase(n) != 0)
-          return 1;
-      }
-    } else {
-      std::cout << "chunked GDN not built (Clang 22): skipped\n";
-    }
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

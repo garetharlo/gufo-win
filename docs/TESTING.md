@@ -153,3 +153,49 @@ directory (`build\release`, `build\gpu-test`). Run it from there, or copy the
 whole directory's `*.dll` next to any exe moved elsewhere (copying just the exe
 fails with exit code `-1073741515` / `0xC0000135`, missing DLL). The toolchain
 bin dir `C:\TheRock\build\bin` alone is not sufficient.
+
+## Flash-Next binary A/B
+
+Changes to prefill arithmetic need a before/after pair, not a git history: save
+the current exe, rebuild, then alternate the two files in one session. Thermal
+drift between sessions is larger than the deltas measured here.
+
+```powershell
+Copy-Item build\release\gufo.exe build\release\gufo-before.exe
+cmake --build --preset release --parallel 4
+$env:PATH = "C:\TheRock\build\bin;$env:PATH"
+```
+
+Resolve `%MODEL%` (UD-Q4_K_XL, first shard) and `%MTP%` (shared Q8_0 sidecar)
+the way `tools/windows/bench-flash-next-context.ps1` does. Then run each block
+for both exes, replacing `gufo-after.exe` with `gufo-before.exe`:
+
+```powershell
+# Interleaved throughput: before, after, before, after
+build\release\gufo-after.exe bench -m %MODEL% --mtp-model %MTP% --speculative mtp -p 512,2048 -n 64 -r 3
+
+# Batched prefill against the one-token-at-a-time reference
+build\release\gufo-after.exe bench -m %MODEL% --validate-prefill 512 -n 0
+
+# Teacher-forced distributions: schedules are ':'-separated, a 'p' prefix
+# selects the prefill arithmetic, and a prefill width must fit max_logit_rows
+# (8 with MTP; without --speculative mtp it is 1 and p8 is rejected)
+build\release\gufo-after.exe bench -m %MODEL% --mtp-model %MTP% --speculative mtp `
+  --logit-eval C:\dev\doc.txt --logit-out before --logit-schedules "1:p8"
+
+# Greedy text, compare per prompt
+build\release\gufo-after.exe prompt -m %MODEL% --mtp-model %MTP% --speculative mtp `
+  -f C:\dev\prompt.txt -n 48 -t 0 --no-display-prompt
+```
+
+`--validate-prefill` is dominated by the attention batching difference (rmse
+about 1.2 at 512 tokens on the fixed pattern), so it does not isolate a
+recurrent-path change; use it to catch regressions, not to size one. Keep the
+greedy prompt pairs: one below the path's token threshold, which must reproduce
+the old text exactly, and one above it, where a difference is the arithmetic
+change itself. Compare only the generated text: drop `[Model Load]` and timing
+lines, or every pair reports a difference. Run `--logit-eval` with one dump per
+binary and compare the two files position by position (`target_lp`, top-1)
+rather than by perplexity alone. Record CUDA/HIP version, exe sizes and dates,
+and the alternated rounds with the numbers; a missing or skipped model is not a
+pass.

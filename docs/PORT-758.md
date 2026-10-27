@@ -47,14 +47,11 @@ so every overlap stage is measured on tg too.
 ## Stages
 
 - [x] 0. Sweep + triage recorded in LINUX-PERF-PORT.md (2026-10-27).
-- [x] 1. Chunked WMMA DeltaNet in `src/models/qwen38_flash_next/kernels/rocm/kernels.hip.cpp`
-  plus `kernels.hpp` API (`GatedDeltaNet` `z_ready` param,
-  `GdnChunkedScanAvailable()`): `GdnChunkPrepKernel`, `GdnChunkScanKernel`,
-  `kGdnChunk*` constants, chunk scratch in `GatedDeltaNet`,
-  `#if __clang_major__ >= 23` gate. Adapted: this fork has no `GdnCheckpoint`
-  and writes `out_half` rows without a stride, so the checkpoint snap and the
-  `out_stride` parameter were dropped. Executor callers keep the default
-  `z_ready=nullptr` (stage 3 skipped).
+- [x] 1. ~~Chunked WMMA DeltaNet~~ REMOVED 2026-10-27 by upstream #850 and by
+  this fork: the kernel, its prep and fused gated norm, the `kGdnChunk*`
+  constants and `GdnChunkedScanAvailable()` are gone again; only the `z_ready`
+  wait on `GatedDeltaNet` remains (the epilogue uses it, stage 3). Reason and
+  numbers in [LINUX-PERF-PORT.md](LINUX-PERF-PORT.md), "Upstream fix 2026-10-27".
 - [x] 2. Row-first W8A8 tile (32 rows) for mixer down at <=1024 tokens
   (`kW8A8NarrowMaxTokens`, `kRowsFastest`), bit-identical, old tile above 1024.
 - [ ] 3. SKIPPED. Side-stream overlap in `executor.cpp` (shared expert beside
@@ -64,7 +61,11 @@ so every overlap stage is measured on tg too.
   splits rows for the NPU Z prefix. Upstream's own ROCm 7.2 notes measured
   these overlaps as losses wherever the chunked scan is inactive, and stages
   1+2 already land at upstream's prefill gain (see stage 4). Revisit only if
-  short-prompt (pp512) throughput matters more than that risk.
+  short-prompt (pp512) throughput matters more than that risk. **Reopened by
+  the #850 removal**: upstream's post-removal table (row split, no scan) is
+  1,286/1,858/1,909 without the overlaps and 1,331/1,855/1,916 with both
+  (+3.3% pp512, neutral pp2048, +0.4% pp4096), so the overlaps are now the
+  only lossless prefill headroom left.
 - [x] 4. Ported `gdn_ops_test` chunked cases; GPU run green; bench below;
   docs updated. NLL sweep not run here (no Linux quality host): numerics are
   bounded by the chunked-vs-row-split test (1.1e-2..1.6e-2 over RMS, the band
@@ -119,3 +120,18 @@ so every overlap stage is measured on tg too.
   measured 75.65 tok/s at 128 tokens in this session, not the 78.40 the old
   table quoted, so the old cell was never like-for-like. README now carries the
   matched table and no footnote.
+- 2026-10-27: stage 1 reverted here, following upstream `c92b19c5` #850 (the
+  scan flips greedy decisions: chat NLL +0.0145, layer error 2.6e-4 vs 5.1e-7
+  relative RMS against the F32 recurrence). Windows release, `gufo bench
+  --mtp-model <shared Q8_0> --speculative mtp -p 512,2048 -n 64 -r 3`, two
+  alternated rounds, before/after exes: pp512 1,181/1,195 → 1,179/1,174
+  (−0.9%), pp2048 1,596/1,596 → 1,576/1,546 (−2.2%), tg64 52.7/53.4 →
+  53.3/53.3 (noise). The old gains were +2.2/+4.4% in the stage 1+2 session, so
+  part of what stage 1 bought was already inside session noise. `--validate-prefill`
+  at 512/1024/2048 is unchanged within noise (old 1.1985/0.3378/0.3781 rmse,
+  new 1.2065/0.3506/0.3487): that metric is dominated by the batched attention
+  difference, not by the recurrence, so it only guards regressions. Greedy text
+  (`-t 0`, 48 tokens) is identical for a 70- and a 115-token prompt and differs
+  from the first token for a ~1.1K-token doc continuation, so the change is
+  scoped to long prefill; a ~1.1K-token tool prompt happened to agree. Gate
+  recipe for the next pair: [TESTING.md](TESTING.md#flash-next-binary-ab).
