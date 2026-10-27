@@ -20,6 +20,15 @@ within single-run noise (untouched AR control moved +4.2%). The runs are
 too short to fill the table (~32 observations per bin); throughput-neutral,
 output-identical.
 
+Extended check (2026-10-26): tg512 @ 8K (126 cycles, 48.82 vs 48.79 t/s,
+`output_sha256` identical) and the four `speculative-corpus` chat prompts
+at 128 tokens (marginal acceptance 57-74%, the trim's regime). All eight
+runs: identical SHA-256 and identical `cycles/drafted/accepted` counters —
+the table changed no decision — tps within ±1.1%. The table only diverges
+from the prior after ~32 observations per bin, which needs long generations
+(~1k tokens); there it is the mechanism that protects against a prior that
+mismatches the running quant/domain. Production value, not benchmark value.
+
 ## Evaluated and rejected
 
 | Item | Reason |
