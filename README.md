@@ -44,7 +44,7 @@ prefill port):
 | 16,384 | AR | 1,512.37 | 1,465.02 | 32.74 | 28.20 | **+16.1%** |
 | 32,768 | AR | 1,487.24 | 1,443.87 | 31.62 | 28.54 | **+10.8%** |
 | 0 | MTP | 1,656.11 | 1,631.13 | 60.82 | 35.51 | **+71.3%** |
-| 16,384 | MTP | 1,471.97 | 1,413.58 | 43.12 | 78.40 | -45.0% |
+| 16,384 | MTP | 1,471.97 | 1,413.58 | 43.12 ¹ | 78.40 | -45.0% (-2.1% ¹) |
 | 32,768 | MTP | 1,446.46 | 1,392.54 | 98.41 | 98.43 | -0.0% |
 
 Prefill runs 1.5-4.1% ahead, and loading stays within 1%. The one loss is a
@@ -60,6 +60,10 @@ at 76.76 tok/s against upstream's 78.40 (-2%), so in-turn MTP speed is
 unchanged. With the chunked scan disabled the same binary reproduces the
 previous trajectory and 72.09 tok/s at this depth. At 32K the trajectories
 re-converge and the row is at parity.
+
+¹ 43.12 tok/s over the full 128-token budget; 76.76 tok/s timed to the end of
+the turn (36 tokens). Upstream's 78.40 is a full-budget number, so the two are
+directly comparable only if the stock binary does not end its turn in this cell.
 
 
 ## Models and benchmarks
