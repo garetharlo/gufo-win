@@ -373,10 +373,12 @@ void PleInject(float* res, const float* gated, const float* conv,
 /// `out_q8` receives the rows quantized into the W8A8 tiled layout
 /// (K = v_heads * d) instead of `out`. With null `out_q8`, a non-null
 /// `out_half` receives F16 rows instead of `out`, and a non-null `out_q8_1`
-/// also receives the F32 rows' unpadded Q8_1 rows. `convolved` consumes
-/// convolution rows already in conv_scratch; it requires null speculative
-/// snapshots.
-void GatedDeltaNet(const float* qkv, std::uint32_t qkv_stride, const float* z,
+/// also receives the F32 rows' unpadded Q8_1 rows. Its reader of `z` (the
+/// chunked scan with the fused norm, or the epilogue) waits for `z_ready`
+/// when it is set. Returns false when that wait cannot be queued. `convolved`
+/// consumes convolution rows already in conv_scratch; it requires null
+/// speculative snapshots.
+bool GatedDeltaNet(const float* qkv, std::uint32_t qkv_stride, const float* z,
                    std::uint32_t z_stride, const float* alpha_beta,
                    const float* conv_w, const float* a, const float* dt,
                    const float* norm_w, float* conv_state, float* conv_scratch,
@@ -386,7 +388,12 @@ void GatedDeltaNet(const float* qkv, std::uint32_t qkv_stride, const float* z,
                    std::uint32_t k_heads, std::uint32_t v_heads,
                    std::uint32_t d, std::uint32_t kernel, bool row_split,
                    bool convolved, float eps, hipStream_t stream,
-                   __half* out_half = nullptr, void* out_q8_1 = nullptr);
+                   __half* out_half = nullptr, void* out_q8_1 = nullptr,
+                   hipEvent_t z_ready = nullptr);
+
+/// Whether wide prefills take the chunked DeltaNet recurrence: the scan
+/// needs Clang 23 or newer (ROCm 10); older compilers keep the row split.
+[[nodiscard]] bool GdnChunkedScanAvailable();
 
 /// Private rows for one request in a decode batch. Scratch regions and all
 /// recurrent/history/rollback buffers must be disjoint between requests.

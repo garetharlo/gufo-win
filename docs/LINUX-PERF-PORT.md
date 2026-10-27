@@ -14,8 +14,8 @@ TheRock ROCm 10.0.0 / clang 23 toolchain used for the Windows build.
 
 - Upstream: <https://github.com/gufo-org/gufo>
 - Review clone: `%TEMP%\opencode\gufo-upstream` (bare clone works; fetch +
-  `git show <sha>`). Last swept upstream `16e8ed47` (2026-10-26) on 2026-10-26,
-  see "External repos survey 2026-10-26"
+  `git show <sha>`). Last swept upstream `9974cb4c` (2026-10-27) on 2026-10-27,
+  see "Upstream sweep 2026-10-27"
 - Local base: upstream `fee9d2a` (PR #314 fix)
 - Local Windows HEAD at review: `c85aada`
 - Local fork already has Windows-specific work in
@@ -1666,3 +1666,54 @@ portable; details per repo:
 
 Net: zero ports today; the Bubo NPU prefill offload was synced on 2026-10-27
 (and still needs real-hardware calibration).
+
+## Upstream sweep 2026-10-27 (`16e8ed47..9974cb4c`, 14 commits)
+
+One performance item to port, and it targets the one metric that is behind:
+
+- `[x]` **`538e2fd7` #758 "faster Flash-Next prefill with chunked DeltaNet and
+  stream overlap"**. Upstream gains pp512 +4.9%, pp2048 +4.1% (1,741 →
+  1,811.71), pp4096 +4.3%, d16K pp2048 +4.0%; GDN call at pp512 −30%.
+  Quality gate: overall NLL +0.0021 (noise), chat +0.0145 (small real rise,
+  from the fused gated norm); all 512/2048-token outputs preserved; the two
+  W8A8 tile swaps are bit-identical. Four retained parts, portable in
+  ascending risk:
+  1. Row-first W8A8 tile (32 rows, `v_msk=false`) for mixer down at ≤1024
+     tokens; falls back at >1024. Bit-identical; touches the w8a8 section of
+     `kernels.hip.cpp`.
+  2. Chunked WMMA DeltaNet for row-split prefill ≥256 rows (32-token chunks,
+     F32 state kept in the WMMA accumulator; gated norm fused inside the
+     scan). New kernels `GdnChunk{NormWmma,PrepareKernel,ScanKernel}` plus
+     `GdnChunkedScanAvailable()`; gated on `__clang_major__ >= 23`, which the
+     TheRock clang 23 build passes, but the no-spill claim (237 VGPR) was
+     measured on clang 24 — verify `GdnChunkScanKernel` spill-free on our
+     toolchain before trusting the gain (clang 22 spilled and was slower
+     than the row split). `convolved` fast path only; checkpoints snap to
+     chunk boundaries; keeps the row-split fallback.
+  3. Side-stream overlaps through event edges (`Executor::side_stream_`,
+     `Moe()` starts the shared expert beside routing; `LinearAttention`
+     moves the Z rows' tiles to `z_stream`): shared expert −65 ms/48-layer
+     pass at pp2048. Needs `DenseF16SsmGemm`/`GatedDeltaNet` signature
+     changes and our graph-capture interplay checked — upstream's earlier
+     multi-stream decode experiments regressed decode −11% before #735
+     narrowed the waits; do not land the copy before measuring decode too.
+  Also ports the lossless `gdn_ops_test`/`f32_reference` fixtures for the
+  chunked scan. Do not blind-cherry-pick: the fork diverged in all four
+  touched files; adapt into `src/models/qwen38_flash_next/kernels/rocm/`.
+  Landed 2026-10-27 (items 1 and 2 only, details in
+  [PORT-758.md](PORT-758.md)): Windows release, one run per binary, pp512
+  1,176.89 → 1,203.29 (+2.2%), pp2048 1,645.26 → 1,718.11 (+4.4%), pp4096
+  1,642.46 → 1,705.69 (+3.9%), tg128 within noise. `GdnChunkScanKernel` is 234
+  VGPR with no spills on TheRock clang 23, so the clang gate is accurate here.
+  Item 3 was skipped: both overlaps interleave with `#ifdef GUFO_NPU` code
+  upstream does not have (shared-expert scratch shared with
+  `npu::BeginProjection`, NPU Z-prefix row split already inside
+  `DenseF16SsmGemm`), and the measured prefill gain already matches upstream
+  without it.
+- Not applicable: `9974cb4c`/`f86cd0d9`/`b2fdc6ac`-era CI and nix (Linux
+  toolchain, ROCm 10.1-only), `4a4a47c1` (patched-ROCr RPATH loading, Linux),
+  `c0e0be58` (quality fixes for the ROCm 10.1 compiler; we build TheRock
+  10.0 on Windows), and the embedding/serve features (`1c62f0a9`, `e472f833`,
+  `ec4aacba`, `5efd8b77`, `c811b451`).
+
+Next sweep from `9974cb4c`.
