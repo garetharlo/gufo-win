@@ -34,37 +34,25 @@ with error bars and settings:
 [context sweep](docs/models/qwen3.8-flash-next/bench-context.html).
 
 Against upstream 0.24.0 (the stock `gufo` release binary, same files, same
-direct `gufo bench` calls, greedy, two repetitions, one process per mode,
-NPU off, 2026-10-25; Gufo re-run 2026-10-27 after the chunked-DeltaNet
-prefill port):
+direct `gufo bench` calls, greedy, 32-token budget, three repetitions, one
+process per mode, NPU off, 2026-10-27):
 
 | Depth | Mode | Gufo pp (tok/s) | upstream pp | Gufo tg (tok/s) | upstream tg | Gain tg |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| 0 | AR | 1,710.08 | 1,684.74 | 35.43 | 27.68 | **+28.0%** |
-| 16,384 | AR | 1,512.37 | 1,465.02 | 32.74 | 28.20 | **+16.1%** |
-| 32,768 | AR | 1,487.24 | 1,443.87 | 31.62 | 28.54 | **+10.8%** |
-| 0 | MTP | 1,656.11 | 1,631.13 | 60.82 | 35.51 | **+71.3%** |
-| 16,384 | MTP | 1,471.97 | 1,413.58 | 43.12 ¹ | 78.40 | -45.0% (-2.1% ¹) |
-| 32,768 | MTP | 1,446.46 | 1,392.54 | 98.41 | 98.43 | -0.0% |
+| 0 | AR | 1,668.82 | 1,663.39 | 33.55 | 27.55 | **+21.8%** |
+| 16,384 | AR | 1,500.88 | 1,451.50 | 31.86 | 27.90 | **+14.2%** |
+| 32,768 | AR | 1,481.42 | 1,431.52 | 30.93 | 27.79 | **+11.3%** |
+| 0 | MTP | 1,655.92 | 1,618.86 | 51.48 | 30.67 | **+67.9%** |
+| 16,384 | MTP | 1,466.45 | 1,406.66 | 87.29 | 85.01 | **+2.7%** |
+| 32,768 | MTP | 1,437.28 | 1,380.76 | 85.70 | 85.12 | **+0.7%** |
 
-Prefill runs 1.5-4.1% ahead, and loading stays within 1%. The one loss is a
-trajectory artefact, not engine speed. The chunked prefill shifts decode
-numerics just enough to move a greedy near-tie: at 16K the first 32 generated
-tokens are identical to the pre-port binary, then the sequence diverges and the
-model ends its turn (`<|im_end|>`) after token 36 of the 128-token budget. The
-bench keeps generating past the end of the turn by design, so the remaining 92
-tokens are post-turn text, where MTP acceptance collapses and the row settles at
-the autoregressive rate. `gufo bench` now prints `ended its turn after N of M
-tokens` for exactly that case. Timed only up to the turn end the same cell runs
-at 76.76 tok/s against upstream's 78.40 (-2%), so in-turn MTP speed is
-unchanged. With the chunked scan disabled the same binary reproduces the
-previous trajectory and 72.09 tok/s at this depth. At 32K the trajectories
-re-converge and the row is at parity.
-
-¹ 43.12 tok/s over the full 128-token budget; 76.76 tok/s timed to the end of
-the turn (36 tokens). Upstream's 78.40 is a full-budget number, so the two are
-directly comparable only if the stock binary does not end its turn in this cell.
-
+Prefill runs 0.3-4.2% ahead and model loading stays within 1%. Decode gains
+11-22% without speculation and 68% at depth 0 with MTP; from 16K both binaries
+copy the repeated prompt at 85-87 tok/s, so those two cells measure that copy
+speed rather than drafting. The short budget also keeps both binaries on the
+same greedy prefix: at 16K they emit identical tokens for the first 32 steps,
+while a longer budget lets the chunked prefill's last-bit numerics move a
+near-tie and the two sequences drift onto different text.
 
 ## Models and benchmarks
 

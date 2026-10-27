@@ -108,3 +108,14 @@ so every overlap stage is measured on tg too.
   changes the method for one cell. Instead `gufo bench` keeps the 128-token
   window and now prints `ended its turn after N of M tokens; the rest is
   post-turn text`, so the artefact is visible in every future run.
+- 2026-10-27: re-measured the whole upstream comparison with the stock v0.24.0
+  Windows binary (`gufo-v0.24.0-windows-x86_64.zip`, same machine) at a 32-token
+  budget, three repetitions, so both columns time the same thing and no cell
+  runs past the end of the turn. Gufo / stock tg: AR 33.55/27.55, 31.86/27.90,
+  30.93/27.79 at d0/16K/32K; MTP 51.48/30.67, 87.29/85.01, 85.70/85.12. The
+  former -45% cell was the 128-token window of a different greedy sequence
+  (ours ends its turn at token 36, so 92 of its tokens were post-turn text);
+  at 32 tokens both binaries emit the same prefix and the cell is +2.7%. Stock
+  measured 75.65 tok/s at 128 tokens in this session, not the 78.40 the old
+  table quoted, so the old cell was never like-for-like. README now carries the
+  matched table and no footnote.
