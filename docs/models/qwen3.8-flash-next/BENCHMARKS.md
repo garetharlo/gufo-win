@@ -57,6 +57,30 @@ tok/s at 8,192/12,288/16,384).
 
 ![Single user, MTP](artifacts/charts/single-mtp.svg)
 
+### Chat-prose decode
+
+The mixed column above comes from an external prompt suite that is not in this
+repository, so it cannot be regenerated here. `gufo bench` has no
+mixed/repetitive switch, and its own corpus is semi-repetitive, so its drafts
+are accepted far more often than chat text would be. One ~400-word prose prompt,
+single session, `-n 256`, Windows release build:
+
+| Configuration | tok/s | vs AR | Accepted/drafted |
+| --- | ---: | ---: | ---: |
+| AR, greedy | 35.22 | — | — |
+| MTP, greedy | 44.5–45.2 | +26 to +28% | 102/152 (67%) |
+| AR, sampled `-t 1.0` | 32.08 | — | — |
+| MTP, sampled `-t 1.0` | 41.98 | +30.9% | 132/219 (60%) |
+| MTP, `--top-k 20 --top-p 0.8` | 44.00 | +37.2% | 122/247 (49%) |
+
+`--draft-tokens` only caps the proposals: `-d 3`, `-d 5` and `-d 7` produce
+identical cycles and counters, because the length controller picks the width
+from its acceptance estimates and the measured cycle costs in `mtp_costs.hpp`.
+At 60–67% acceptance it settles on one or two drafts per cycle. Sidecars:
+`mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf` does not load (`blk.48.hc_attn_down.weight`
+has no Q4_K support in the sidecar loader); shared-Q8_0 and full-Q8_0 measure
+within 1%, so the shared head is the right default.
+
 ## Long-context sweep, direct
 
 `gufo bench`, greedy, one process at a time (the 96 GB carve holds one Q4 model

@@ -25,12 +25,18 @@ nix build
 MODEL=/path/to/first-target-shard.gguf
 MTP=/path/to/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf
 ./result/bin/gufo chat --model "$MODEL"
-./result/bin/gufo serve llm --model "$MODEL" --speculative mtp \
-  --mtp-model "$MTP" --sessions 2 --context 32768
+./result/bin/gufo serve llm --model "$MODEL" --mtp-model "$MTP" \
+  --sessions 2 --context 32768
 ```
 
-The loader discovers the remaining shards. Omit the speculative options for AR;
-AR sessions allocate no predictor state even if a shared model has MTP loaded.
+The loader discovers the remaining shards. `serve` selects MTP whenever
+`--mtp-model` is given, as it already does for DSpark with `--dspark-model`;
+pass `--speculative off` to load the head without drafting. `prompt` and `bench`
+still require the explicit `--speculative mtp`, so a benchmark never changes
+mode silently.
+
+Omit the speculative options for AR; AR sessions allocate no predictor state
+even if a shared model has MTP loaded.
 Adaptive MTP is default, with `--draft-tokens` capping 1–7 proposals. Eligible
 requests draft over the first 98,304 token IDs plus a 1,024-row table containing
 special tokens and other tokens already used by the request. The full head

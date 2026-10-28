@@ -188,3 +188,25 @@ and 26 to 77: a ~5% deep-context prefill cost buying ~2.5x decode.
   (argv[4] = MTP path) and is not ctest-registered; it is the only
   automated-style coverage for `DecodeBatchImpl` changes.
 
+## MTP decode follow-up (2026-10-28)
+
+Step 2 still needs the Linux gfx1151 host: `C:\TheRock` carries neither
+`rocprofv3` nor `amd-smi`, so no profile can be captured here. What the Windows
+host answered instead:
+
+- Prefill is monotone with no anomaly — 14.3 t/s at 1 new token, 576 at 128,
+  1199 at 512, 1544 at 2048, 1665 at 8192, i.e. a 0.57–0.59 ms/token asymptote.
+  The only expensive region is 64 tokens and below, which is MoE expert-weight
+  bandwidth, not a kernel defect.
+- Decode on chat prose: MTP beats AR by 26–28% greedy and 31–37% sampled at
+  temperature 1.0, at 49–67% acceptance (tables in
+  `models/qwen3.8-flash-next/BENCHMARKS.md`). The `-8.2%` repetitive cell at
+  depth 12,288 is a prompt-modelling artifact, not an engine regression.
+- `548c5177` makes `serve` enable MTP from `--mtp-model` alone, mirroring the
+  existing DSpark promotion. `prompt` and `bench` keep the explicit flag so a
+  recorded benchmark never switches mode silently.
+- Stage 3 (side-stream overlap) stays rejected: upstream measured +3.3% pp512
+  and nothing at pp2048, and `alt_stream_` in `executor.cpp` is a
+  queue-freshness ping-pong whose concurrent use would break graph capture and
+  the NPU scratch sharing.
+
