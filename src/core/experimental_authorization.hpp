@@ -10,9 +10,9 @@ namespace gufo::core {
 enum class ExperimentalFeature { Prefill };
 
 // A value capability: default construction is denied. Only the operator opt-in
-// (CLI --npu-prefill on) grants it, so no code path reaches the NPU by accident.
+// (GUFO_NPU_PREFILL=1) grants it, so no code path reaches the NPU by accident.
 // Ported from bubo src/core/experimental_authorization.hpp; bubo's release
-// resolver is replaced by Granted(), called once from the CLI parse.
+// resolver is replaced by Granted(), called once from engine startup.
 class ExperimentalAuthorization {
 public:
   ExperimentalAuthorization() = default;

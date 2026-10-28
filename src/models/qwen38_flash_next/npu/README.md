@@ -4,10 +4,11 @@ The NPU path offloads eligible Q8_0 projections in complete 4096-token
 prefill groups to XDNA2 through a persistent XRT context. Decode, partial
 groups and incompatible model shapes use the GPU.
 
-Default and subagents profiles request NPU prefill automatically. Exact and
-stock keep it OFF and reject an explicit ON. --npu-prefill off disables it.
-If startup cannot verify artifacts or XRT, create the device or complete the
-startup heartbeat, one warning names the reason and the process uses the GPU.
+NPU prefill is off by default and stays off unless the process is started with
+GUFO_NPU_PREFILL=1. That variable is the only switch; there is no profile or
+command-line flag that turns it on. If startup cannot verify artifacts or XRT,
+create the device or complete the startup heartbeat, one warning names the
+reason and the process uses the GPU.
 A build without NPU support reports that reason once and uses the GPU.
 
 GUFO_NPU_DIR overrides the artifact directory. Without an override, the
