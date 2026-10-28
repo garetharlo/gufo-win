@@ -49,6 +49,12 @@ text, including Gufo predictor catch-up.
 | 131,072 | 1335.91 | 135.42 | +886.5% | 28.12 | 14.63 | +92.2% | 42.32 | 20.96 | +101.9% |
 <!-- /bench -->
 
+The repetitive 12,288 cell is a prompt-modelling effect, not an engine
+regression: the bench logs report "ended its turn after 12 of 128 tokens", so
+the remaining tokens are post-turn free text that drafts cannot predict, and
+the autoregressive rate stays flat across the same depths (33.08/32.94/32.50
+tok/s at 8,192/12,288/16,384).
+
 ![Single user, MTP](artifacts/charts/single-mtp.svg)
 
 ## Long-context sweep, direct
