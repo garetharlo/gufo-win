@@ -5,7 +5,7 @@ shared-Q8_0 MTP sidecar; Gufo uses adaptive MTP. HTTP (direct `gufo bench` for
 the long-context sweep), greedy, thinking off.
 Gufo single-user MTP, concurrency, loading and llama.cpp MTP at 64K/128K:
 September 23, 2026; other results: September 22; direct 8K-256K sweep:
-October 26, 2026; bubo comparison: October 21, 2026.
+October 28, 2026; bubo comparison: October 21, 2026.
 llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
@@ -66,10 +66,10 @@ generated tokens. Other rows use the exact context.
 <!-- bench:context-sweep -->
 | Flash-Next Q4<br>Context (tokens) | Prefill pp (tok/s) | Decode AR (tok/s) | Decode MTP (tok/s) | MTP accepted |
 | ---: | ---: | ---: | ---: | ---: |
-| 8,192 | 1637.48 ± 10.55 | 33.52 ± 0.44 | 57.16 ± 1.70 | 69% (89/129) |
-| 32,768 | 1588.19 ± 0.99 | 32.08 ± 0.20 | 96.79 ± 3.32 | 100% (111/111) |
-| 131,072 | 1526.68 ± 0.23 | 29.29 ± 0.21 | 92.47 ± 3.14 | 100% (111/111) |
-| 262,144 | 1464.06 ± 0.57 | 27.35 ± 0.12 | 87.71 ± 2.53 | 100% (111/111) |
+| 8,192 | 1678.35 ± 0.38 | 32.15 ± 2.72 | 50.08 ± 4.51 | 64% (83/130) |
+| 32,768 | 1635.77 ± 0.38 | 32.15 ± 0.17 | 97.15 ± 3.49 | 100% (111/111) |
+| 131,072 | 1570.13 ± 0.05 | 29.44 ± 0.14 | 92.44 ± 3.39 | 100% (111/111) |
+| 262,144 | 1502.72 ± 0.44 | 27.35 ± 0.13 | 87.94 ± 2.67 | 100% (111/111) |
 <!-- /bench -->
 
 The bench prompt repeats a 20-token pattern. From 32K the model continues that
@@ -115,7 +115,7 @@ Run notes for future sweeps:
   `-Mtp`, `-Sizes` or `-Repetitions`. Use `-Exe` for another engine binary, for
   example `-Exe C:\dev\bubo\bin\bubo.exe -OutDir
   artifacts\bench-context-bubo`.
-- 8K MTP acceptance (69%) is the only row below 90%. From 32K the fixed bench
+- 8K MTP acceptance (64%) is the only row below 90%. From 32K the fixed bench
   pattern is repeated verbatim, so the MTP column is a repeated-text upper
   bound, not chat or code throughput.
 
