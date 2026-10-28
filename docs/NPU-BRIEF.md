@@ -43,18 +43,31 @@ Each of these was checked and is wrong:
 
 ## 3. Measurements
 
-pp8192, UD-Q4_K_XL, 32 GB BOSGAME host, guard on where noted:
+pp8192, UD-Q4_K_XL, 32 GB BOSGAME host (`-d 0 -n 8 -r 1`, 2026-10-28, after
+`1018b08f` moved prefill to 8192-token chunks):
 
 | build                        | tok/s   |
 | ---------------------------- | ------- |
-| GPU only                     | 1608.09 |
-| NPU + guard                  | 1563.61 |
-| NPU, guard off               | 1527.68 |
-| upstream 0.1.0 binary        | 1520.89 |
+| GPU only                     | 1667.40 |
+| NPU + guard                  | 1566.91 |
+| NPU, guard off               | 1532.60 |
 
-The guard calibration predates `1018b08f` (`kPrefillChunkTokens` 4096 → 8192,
-+2.2 % pp8192 GPU only). Decisions are unaffected; only the magnitudes are
-stale.
+The NPU path is 6-8 % slower than the GPU here, so it stays opt-in. The guard
+trips as designed on this host (`chunk_means_w=[107.3, 106.0, 85.4] > 82.0`) and
+the run then lands on the GPU, which is why guard-on beats guard-off by 2.2 %:
+on an uncapped host the envelope guard is itself the fastest place to fail.
+
+Older numbers (1608.09 / 1563.61 / 1527.68, 4096-token chunks) in
+`docs/LINUX-PERF-PORT.md` are ~3.7 % stale but keep the same ordering.
+
+Two runtime traps on this host:
+
+- `build/release/gufo.exe` looks for artifacts in `<exe>/../tools/npu`, which the
+  CMake tree does not have, so the NPU silently falls back to the GPU with
+  `artifact open failed`. Pass `GUFO_NPU_DIR=<repo>/tools/npu` for dev builds.
+  The default is correct for the installed layout (`result/bin/gufo`).
+- `GUFO_NPU_PREFILL=1` alone is not enough to see NPU numbers; it also needs the
+  XRT artifacts above.
 
 Upstream's claimed +5-7 % at 8K and +3.5-5.5 % at 16K was measured on a 70 W
 128 GB laptop. Here a 4096-token NPU slice costs about 2.6 s against a 2.55 s
