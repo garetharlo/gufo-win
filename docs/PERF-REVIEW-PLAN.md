@@ -24,7 +24,7 @@ Choose from the bench suite (`gufo bench`, serving benchmark) and freeze it:
 same model artifact, quant, context, prompt, seed, and token counts. Record
 it in the change description. Candidates:
 
-- pp2048 prefill (known gap: ~18-23% behind upstream — highest-value target)
+- pp2048 prefill (closed: 3.3–9× llama.cpp, `models/qwen3.8-flash-next/BENCHMARKS.md`)
 - d32768 decode, greedy and sampled+MTP variants
 - model load time (I/O bound; verify before optimizing)
 
@@ -209,4 +209,47 @@ host answered instead:
   and nothing at pp2048, and `alt_stream_` in `executor.cpp` is a
   queue-freshness ping-pong whose concurrent use would break graph capture and
   the NPU scratch sharing.
+
+## Phase-timeline pass (2026-10-28, Windows)
+
+Step 2 without `rocprofv3`: the in-engine timeline (`GUFO_TRACE=1`,
+`kernels/rocm/trace.hpp`) stamps the GPU wall clock at each phase boundary, so
+the decode loop splits on this host. Prefill stays one `verify` phase, so it is
+characterised by prompt scaling instead. Reproduce from `build\release`:
+
+```powershell
+gufo bench -m <shard1> -p 512,1024,2048,4096,8192 -n 8 -d 0 -r 2 -v
+$env:GUFO_TRACE="1"
+gufo bench -m <shard1> -p 2048 -n 1024 -d 0 -r 1 -v
+gufo bench -m <shard1> --speculative mtp --mtp-model <shared Q8_0> `
+  -p 2048 -n 1024 -d 0 -r 1 -v
+gufo bench -m <shard1> --speculative mtp --mtp-model <shared Q8_0> `
+  -p 2048 -n 512 -d 32768 -r 1 -v
+```
+
+- Prefill (AR): 1,197.5 / 1,455.6 / 1,556.4 / 1,635.4 / 1,661.5 tok/s at
+  512–8,192 tokens, marginal 0.537 / 0.599 / 0.580 / 0.592 ms/token. Flat, no
+  quadratic term: attention is not a measurable share of prefill up to 8K and
+  the pipeline is linear.
+- AR decode at depth 2,048: 26.93 ms verify-body plus 0.68 ms prefix per token,
+  GPU busy 96.1–97.1%, idle 0.83–1.13 ms. The 1.8–2.2 ms host submit stays
+  hidden behind the previous body.
+- MTP decode at depth 0: verify-body 37.65 ms at w3 (119 cycles) against 26.93
+  at w1 (32 cycles), so each extra verified row costs 5.4 ms; draft 1.75–3.29
+  ms, rollback 0.21 ms, idle 1.64 ms (3.8%). Deep context does not degrade it:
+  100.19 tok/s tg512 at depth 32,768 with 447/447 drafts and 438/438
+  prompt-lookup accepted. The depth-32K trace window's 4.6 s gaps are prefill
+  chunks, not a load stall: the PLE gather is hidden behind them (131,072 rows
+  per chunk, 344 distinct, 78 ms of reads on the first chunk and none after;
+  the trace's GPU-busy figure counts decode-cycle work only), so the load path
+  is not the limit.
+- Decisions from the data: WMMA flash attention for prefill is rejected (no
+  quadratic term to attack, and 32K decode runs at 100 tok/s, so the arithmetic
+  change cannot pay for the greedy-replay gate); F32 chunked DeltaNet stays
+  rejected (`f3645979` prices the remaining 2.2% pp2048 at the same gate);
+  MTP acceptance is already 100% on the repetitive probe, and the only line
+  item of size left is the 5.4 ms verify-row marginal cost (13% of a w1
+  cycle), which needs per-kernel timing — the Linux host or new gated
+  instrumentation, a separate proposal. The 96–97% busy loop leaves nothing
+  for the Windows dispatch path.
 
