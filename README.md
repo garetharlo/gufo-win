@@ -16,14 +16,14 @@ containers. The Linux original lives at
 
 Qwen3.8-Flash-Next Q4 (`UD-Q4_K_XL` + MTP Q8_0), 128 GB unified memory with a
 96 GB dedicated carve; direct `gufo bench`, greedy, two timed repetitions.
-Long-context sweep, 8K to 256K (October 26, 2026):
+Long-context sweep, 8K to 256K (October 28, 2026):
 
 | Context | Prefill (tok/s) | AR decode (tok/s) | MTP decode (tok/s) | MTP accepted |
 | --- | ---: | ---: | ---: | ---: |
-| 8,192 | 1,637.48 | 33.52 | 57.16 | 69% |
-| 32,768 | 1,588.19 | 32.08 | 96.79 | 100% |
-| 131,072 | 1,526.68 | 29.29 | 92.47 | 100% |
-| 262,144 | 1,464.06 | 27.35 | 87.71 | 100% |
+| 8,192 | 1,678.35 | 32.15 | 50.08 | 64% |
+| 32,768 | 1,635.77 | 32.15 | 97.15 | 100% |
+| 131,072 | 1,570.13 | 29.44 | 92.44 | 100% |
+| 262,144 | 1,502.72 | 27.35 | 87.94 | 100% |
 
 The 256K context holds the ~89 GiB model and state fully inside the 96 GB
 carve, so it decodes at full speed. The MTP column is an upper bound: the
