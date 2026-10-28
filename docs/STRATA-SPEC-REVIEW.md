@@ -1,7 +1,8 @@
-﻿# Strata speculative-decoding review (2026-10-26)
+﻿# Strata speculative-decoding review (2026-10-26, second pass 2026-10-27)
 
 Review of `github.com/niko1221/strata` @ `4b9e05a` (2026-10-25) for
 speculative techniques portable to Gufo's qwen3.8-flash-next decode path.
+The 2026-10-27 pass sweeps the 0.2.7 work landed after that commit.
 Strata's speculative stack: `src/spec/` (controller, draft policy, suffix
 drafter), `src/ngram/` (PLE table reader), docs in `docs/A770_SPEED_SPEC.md`
 and `docs/STRIX_HALO.md`.
@@ -12,6 +13,7 @@ and `docs/STRIX_HALO.md`.
 | --- | --- | --- |
 | Online accept-probability table | `df097b30` | `MtpAcceptTable`: Beta hit/miss counts per (depth-class, top-prob bin), seeded with the 2026-09-25 prior at weight 32, refined from every verified cycle. Replaces the frozen `kMtpAcceptByTop` lookup feeding the survival trim. Output-invariant (draft-side only; `output_sha256` identical in A/B). |
 | Stall clamp on cycle-cost samples | `df097b30` | `MtpBatchController::Observe` clamps any cycle-ms sample >4x the bin's running estimate before the 0.25-EMA, so one preemption/page-fault spike cannot close a width for an occupancy/context bin. Strata's measured constant. |
+| 8192-token prefill chunk (`e7e48be2`) | Raising `kPrefillChunkTokens` 4096 -> 8192 (our Linux chunk was already 4096, not their 1024) is +2.2% at pp8192 and +2.6% at pp32768, -1.6% at pp4096, decode unchanged (tg64 55.3/55.5 at d0, 95.4/95.5 at d16K, MTP shared-Q8_0, depth 0, 2 reps). Runs at d32768 without OOM (pp4096 1543.76, tg8 27.10). |
 
 A/B (`tools/windows/bench-flash-next-context.ps1`, 1 rep, deterministic
 seeds; report: `artifacts/bench-context/spec-ab-report.html`, commit
@@ -40,6 +42,8 @@ mismatches the running quant/domain. Production value, not benchmark value.
 | Draft-source contention FSM | Solves prompt-lookup vs MTP as separate sources; our single fused chain encodes the same policy. |
 | Probe-budget decay (5%, 0.995/round) | Our `probe_depth`/`probe_delay` mechanism is bounded differently; nothing measurable to fix. |
 | Strix scheduling asymmetry (`DS4_ASYNC_T=4`, `63b8a8d3`): verify window synchronous instead of mailbox/async | Their win is dropping a cross-stream mailbox; our decode never overlaps two streams (one submission per pass, the alternate stream is picked only after `WaitFlag` returns), so there is no handoff to remove. The closest switch, `flag_waits`, is *faster* than `hipStreamSynchronize` on gfx1151; measured (UD-Q4_K_XL + shared-Q8_0 MTP, `gufo bench --n-prompt 9 --n-gen 64 --n-depth 0,16384`, 2 interleaved rounds, tg64 t/s): all-on 55.48/55.48 and 95.49/95.23, `-flag_waits` 54.65/54.76 and 93.82/93.81, `-copy_kernels` 55.22/55.21 and 94.76/95.07, `none` 54.50/54.47 and 93.13/93.48. Every Windows switch helps; the package is worth +1.4% at depth 0 and +2.5% at 16K, the opposite sign of Strata's result. Not re-tested on Linux (no gfx1151 Linux host here), where the same switches are off by default. |
+| Long-context indexer select (`STRATA_SELECT_LONG`, `b434a8aa`): one CTA per 2048 blocks of top-k capacity, shuffle-free per-head block scorer | Our `SelectScoreKernel` already builds the head sum in registers with an in-block butterfly and the score sweep is already spread over CTAs; the multi-CTA top-k only pays off at 135K-300K score cells, while our select chunk caps at 512 keys x 32-block rows (32768 cells). Measured per call: ~15 us at 32K context, ~25 us at 128K; 12 select layers make select ~1% of a decode step and their change only touches the top-k half, so the ceiling is 0.4-0.6% for a bit-exact two-level rewrite. |
+| Head at 8 columns per weight pass (`e4328457`) | Already satisfied: `MMVQ_MAX_BATCH_SIZE = 8` gives Q8_0 heads one weight read for up to 8 columns, K-quant heads go through the 64-row `get_mmq_y_host` MMA tile, and the verify head is a single `Dense(..., n_tokens)` call; only the drafter's per-step 1-row head is left, which has no rows to batch. |
 
 ## Strata findings worth remembering
 

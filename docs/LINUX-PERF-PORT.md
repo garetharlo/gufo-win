@@ -1634,9 +1634,12 @@ portable; details per repo:
   `/embeddings` endpoint (#813), image `detail` bounding (#774), embedding
   truncation (#765), gcc16 include fix (#782), and CI. Next sweep from
   `16e8ed47` (v0.25.0).
-- **niko1221/strata**: no new commits since `4b9e05a`. Their remaining
-  gfx1151 items besides the closed tuning table (dense MMQ +0.2%, shared-expert
-  stream ±0.1%) are measured-neutral there.
+- **niko1221/strata**: swept 2026-10-27 from `4b9e05a` to post-0.2.7 (~360
+  commits). Ported: 8192-token prefill chunk (`kPrefillChunkTokens`). Not
+  applicable: scheduling asymmetry (`63b8a8d3`), head 8-column pass
+  (`e4328457`, already satisfied), long-context select (`b434a8aa`, ceiling
+  <1% of a step), KVA, the DS4-only drafter bits. Details in
+  [STRATA-SPEC-REVIEW.md](STRATA-SPEC-REVIEW.md).
 - **haloforge-labs/bubo**: no new commits since 2026-10-13; V2K stays rejected,
   NPU offload sync landed 2026-10-27 (see the DONE entry above).
 - **jesdga95/basalt**: 18 new commits, all CUDA sm_120: multi-card expert

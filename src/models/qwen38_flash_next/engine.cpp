@@ -71,11 +71,12 @@ std::size_t MtpTopBin(const MtpProposal& proposal) {
 }
 
 // gfx1151, served repository prompts: 4096-token chunks prefill 24K-102K
-// tokens 6-11% faster than 2048 (pp4096 +5% at d0, +6% at d32K). Each
-// chunk's n-gram gather doubles; next-chunk prefetch overlaps that read.
-// Prefill logits do not depend on the chunk size
+// tokens 6-11% faster than 2048 (pp4096 +5% at d0, +6% at d32K); 8192 against
+// 4096 at d0 is +2.2% at pp8192 and +2.6% at pp32768 for -1.6% at pp4096,
+// decode unchanged. Each chunk's n-gram gather doubles; next-chunk prefetch
+// overlaps that read. Prefill logits do not depend on the chunk size
 // (pre-budget queries always take the dense attention tiles).
-constexpr std::uint32_t kPrefillChunkTokens = 4096;
+constexpr std::uint32_t kPrefillChunkTokens = 8192;
 
 void AssignError(std::string* error_msg, std::string_view message) {
   if (error_msg != nullptr) {
