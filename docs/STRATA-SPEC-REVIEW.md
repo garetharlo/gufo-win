@@ -39,6 +39,7 @@ mismatches the running quant/domain. Production value, not benchmark value.
 | PLE n-gram table (26.8 GiB streamed) | DeepSeek-V4-specific artifact; no equivalent tensor in our models. |
 | Draft-source contention FSM | Solves prompt-lookup vs MTP as separate sources; our single fused chain encodes the same policy. |
 | Probe-budget decay (5%, 0.995/round) | Our `probe_depth`/`probe_delay` mechanism is bounded differently; nothing measurable to fix. |
+| Strix scheduling asymmetry (`DS4_ASYNC_T=4`, `63b8a8d3`): verify window synchronous instead of mailbox/async | Their win is dropping a cross-stream mailbox; our decode never overlaps two streams (one submission per pass, the alternate stream is picked only after `WaitFlag` returns), so there is no handoff to remove. The closest switch, `flag_waits`, is *faster* than `hipStreamSynchronize` on gfx1151; measured (UD-Q4_K_XL + shared-Q8_0 MTP, `gufo bench --n-prompt 9 --n-gen 64 --n-depth 0,16384`, 2 interleaved rounds, tg64 t/s): all-on 55.48/55.48 and 95.49/95.23, `-flag_waits` 54.65/54.76 and 93.82/93.81, `-copy_kernels` 55.22/55.21 and 94.76/95.07, `none` 54.50/54.47 and 93.13/93.48. Every Windows switch helps; the package is worth +1.4% at depth 0 and +2.5% at 16K, the opposite sign of Strata's result. Not re-tested on Linux (no gfx1151 Linux host here), where the same switches are off by default. |
 
 ## Strata findings worth remembering
 
