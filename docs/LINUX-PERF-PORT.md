@@ -1755,4 +1755,36 @@ A quality fix, not a performance one, and it takes back item 2 of #758:
   candidate; upstream measured it at 1,331/1,855/1,916 against 1,286/1,858/1,909
   with the scan gone (+3.3% pp512, neutral pp2048, +0.4% pp4096).
 
-Next sweep from `c92b19c5`.
+## Upstream fixes 2026-10-29 (`c92b19c5..1fc829ea` #849, #858, #788)
+
+Three correctness fixes, hand-ported hunk by hunk (the fork shares no history
+with upstream, so no patch applies):
+
+- `[x]` **`81ff13c3` #849 "bound draft-ID remapping and block selection by
+  their buffers"** — the device supplies positions while the host sizes the
+  rows, so after a ring wrap `complete`, `n_kv / ratio` and the sparse walk ran
+  past the mask and score rows. `SelectScoreKernel` guards `b >= max_blocks`,
+  `SelectMarkKernel` clamps `complete` to `max_blocks`,
+  `CompactSelectionKernel` and `AttentionKernel` clamp to `mask_words * 32`,
+  and `RemapDraftIds` takes `table_rows` (`kMtpDraftExtraRows` at all four call
+  sites) and maps a row past the table to `UINT32_MAX`, the empty-slot value.
+  Tests: `CheckPositionPastRows` (select_ops), `CheckPositionPastMask`
+  (attention_ops, walk and compact list), `CheckRemapDraftIds` (mtp_ops).
+- `[x]` **`abbc5cb8` #858 "retry any failed unbuffered weight read through the
+  buffered file"** — `weight_upload.cpp` no longer fails the load when an
+  `O_DIRECT` read errors; the buffered `ReadFully` retries the whole slice and
+  reports its own `errno`. The test interposes `pread`/`pread64` and fails
+  every `O_DIRECT` read, then checks the bytes and the fallback count.
+- `[x]` **`7b94a6a3` #788 "run Q8_0 inject and alpha/beta weights on their F32
+  kernels"** — artifacts that store `hc_*_inject` and `ssm_alpha`/`ssm_beta` as
+  Q8_0 now upload them untouched and expand them to F32 once the disk pipeline
+  drains (`ExpandQ8_0Kernel`), so the hyper-connection inject uses its fused
+  F32 epilogue and alpha/beta take the F32 stack's F16 route, the way the
+  official F32 GGUF runs. `ExpandedQ8_0Tensors()` counts them for a one-line
+  `q8_0_expanded` loader warning. Test: `CheckExpandQ8_0` (projection_ops).
+- Not ported: #854 (YaRN — no `yarn` identifier in this tree), #840
+  (deepseek), #857 (nix). Still open: #740 growable arena, #708
+  device-resident weights, #779 masked 16-row prefill GEMM, #810 Windows
+  model-bench, #758 item 3 (side-stream overlap).
+
+Next sweep from `1fc829ea`.
