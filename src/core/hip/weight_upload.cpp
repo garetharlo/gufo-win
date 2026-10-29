@@ -129,9 +129,9 @@ struct WeightUpload::State {
       read = ReadFully(shard.direct_fd, slot.buffer, begin, length,
                        skip + task.size);
       payload = static_cast<const char*>(slot.buffer) + skip;
-      if (!read && errno != EINVAL && errno != EOPNOTSUPP) {
-        return "shard read failed: " + std::string(std::strerror(errno));
-      }
+      // A failed unbuffered read retries through the buffered descriptor,
+      // which reports its own error. Some filesystems accept O_DIRECT at open
+      // but reject aligned reads, and a read can fail on its own (EIO).
     }
     if (!read) {
       // Some filesystems accept O_DIRECT at open but reject aligned reads.
