@@ -75,6 +75,9 @@ target_link_options(npu_xrt INTERFACE
 function(npu_attach_runtime target)
   target_sources(${target} PRIVATE $<TARGET_OBJECTS:npu_runtime>)
   target_link_libraries(${target} PRIVATE npu_xrt)
+  # The NPU guards add parameters and members to the public flash-next
+  # headers, so every consumer must compile with the same define.
+  target_compile_definitions(${target} PUBLIC GUFO_NPU=1)
 endfunction()
 
 # HIP encoding and transfer support.
