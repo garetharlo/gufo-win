@@ -2354,7 +2354,9 @@ __global__ void SelectScoreKernel(const float* q, const __half* blocks,
   const auto t0 = blockIdx.x;
   const auto complete = (*start_pos + first_token + t0 + 1) / ratio;
   const auto b = blockIdx.y * blockDim.x + threadIdx.x;
-  if (t0 >= n_tokens || complete <= budget || b >= complete)
+  // The position comes from the device, the row size from the host: a block
+  // past max_blocks has no score slot in this row.
+  if (t0 >= n_tokens || complete <= budget || b >= complete || b >= max_blocks)
     return;
   float key[kSelectDim];
 #pragma unroll
@@ -2468,7 +2470,8 @@ __launch_bounds__(kBlock) __global__
   __shared__ std::uint32_t state[3];  // threshold, remaining, bin count
   const std::uint32_t t = blockIdx.x;
   const std::uint32_t pos = *start_pos + first_token + t;
-  const std::uint32_t complete = (pos + 1) / ratio;
+  // Only max_blocks scores exist per row (see SelectScoreKernel).
+  const std::uint32_t complete = min((pos + 1) / ratio, max_blocks);
   std::uint32_t* words = mask + static_cast<std::size_t>(t) * mask_words;
   for (std::uint32_t w = threadIdx.x; w < mask_words; w += blockDim.x) {
     words[w] = complete <= budget ? 0xFFFFFFFFu : 0u;
@@ -2663,7 +2666,9 @@ __global__ void CompactSelectionKernel(
   const std::uint32_t lane = i & 31u;
   const std::uint32_t wave = i >> 5u;
   const std::uint32_t n_kv = *start_pos + t + 1;
-  const std::uint32_t n_complete = n_kv / ratio;  // tail_start / ratio
+  // The mask row holds mask_words words; selection past it writes nothing
+  // (the list slot guard below still bounds `capacity` entries).
+  const std::uint32_t n_complete = min(n_kv / ratio, mask_words * 32u);
   const std::uint32_t* words = mask + static_cast<std::size_t>(t) * mask_words;
   std::uint32_t* out = lists + static_cast<std::size_t>(t) * capacity;
   std::uint32_t written = 0;  // selected blocks of the earlier windows
@@ -2884,7 +2889,8 @@ __global__ void AttentionKernel(
       tile_step();
     }
   } else {
-    const std::uint32_t n_complete = tail_start / ratio;
+    // The mask row holds mask_words words; a position past it selects nothing.
+    const std::uint32_t n_complete = min(tail_start / ratio, mask_words * 32u);
     const std::uint32_t* row =
         lists == nullptr ? nullptr
                          : lists + static_cast<std::size_t>(t) * capacity;
@@ -5568,6 +5574,25 @@ void NarrowActivations(const float* x, void* out, bool bf16, std::size_t count,
   }
 }
 
+__global__ void ExpandQ8_0Kernel(const std::uint8_t* q8, float* out,
+                                 std::size_t count) {
+  const std::size_t i =
+      blockIdx.x * static_cast<std::size_t>(blockDim.x) + threadIdx.x;
+  if (i < count) {
+    const std::uint8_t* blk = q8 + (i / 32) * 34;
+    const __half d = *reinterpret_cast<const __half*>(blk);
+    const auto q = static_cast<const std::int8_t*>(
+        static_cast<const void*>(blk + 2))[i % 32];
+    out[i] = __half2float(d) * static_cast<float>(q);
+  }
+}
+
+void ExpandQ8_0(const void* q8, float* out, std::size_t count,
+                hipStream_t stream) {
+  hipLaunchKernelGGL(ExpandQ8_0Kernel, dim3(Blocks(count)), dim3(kThreads), 0,
+                     stream, static_cast<const std::uint8_t*>(q8), out, count);
+}
+
 std::size_t Q8TiledBytes(std::size_t batch, std::size_t k) {
   // The GEMM stages whole 128-token macro tiles, so the buffer is sized to
   // the batch rounded up to one (the padding tiles are never read as
@@ -7374,16 +7399,22 @@ void GatherDraftLogits(float* logits, const std::int32_t* table,
 
 __global__ void RemapDraftIdsKernel(std::uint32_t* ids, std::uint32_t n,
                                     std::uint32_t prefix,
-                                    const std::int32_t* table) {
+                                    const std::int32_t* table,
+                                    std::uint32_t table_rows) {
   const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n && ids[i] >= prefix)
-    ids[i] = static_cast<std::uint32_t>(table[ids[i] - prefix]);
+  if (i >= n || ids[i] < prefix)
+    return;
+  // A row past the table reads as an empty slot (-1), not past the table.
+  const std::uint32_t row = ids[i] - prefix;
+  ids[i] =
+      row < table_rows ? static_cast<std::uint32_t>(table[row]) : UINT32_MAX;
 }
 
 void RemapDraftIds(std::uint32_t* ids, std::uint32_t n, std::uint32_t prefix,
-                   const std::int32_t* table, hipStream_t stream) {
+                   const std::int32_t* table, std::uint32_t table_rows,
+                   hipStream_t stream) {
   hipLaunchKernelGGL(RemapDraftIdsKernel, dim3(Blocks(n)), dim3(kThreads), 0,
-                     stream, ids, n, prefix, table);
+                     stream, ids, n, prefix, table, table_rows);
 }
 
 void PenalizedArgmax(const float* logits, GreedyPenaltyRows penalties,
