@@ -2232,8 +2232,10 @@ __global__ void RopeKernel(float* x, std::uint32_t heads, std::uint32_t d,
     const float c = s_cos[i];
     const float a = v[i];
     const float b = v[i + half];
-    v[i] = a * c - b * s;
-    v[i + half] = a * s + b * c;
+    // Same rounding as the fused PrepareAttentionKernel, so both routes are
+    // bit-identical whatever the compiler contracts.
+    v[i] = __fmaf_rn(a, c, -__fmul_rn(b, s));
+    v[i + half] = __fmaf_rn(a, s, __fmul_rn(b, c));
   }
 }
 
