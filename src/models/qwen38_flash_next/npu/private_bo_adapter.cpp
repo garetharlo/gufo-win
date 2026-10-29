@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "bo_address_table.hpp"
+#include "request_stats.hpp"
 #include "src/core/crypto/sha256.hpp"
 #include "xrt/xrt_bo.h"
 #include "xrt/xrt_device.h"
@@ -377,10 +378,12 @@ void PrivateBoAdapter::ExecuteBatch(
     const std::vector<std::vector<std::uint8_t>>& weights,
     const std::function<void(std::size_t, std::span<const std::byte>)>&
         consume) {
+  auto& st = Stats();
   impl_->Ready();
   Require(a.size() == kABytes && !weights.empty() && weights.size() <= 12 &&
               bool(consume),
           "batch input geometry mismatch");
+  const auto weight0 = NowNs();
   for (const auto& b : weights) {
     Require(b.size() == kBBytes, "B byte length mismatch");
     if (!impl_->weights.contains(reinterpret_cast<const std::byte*>(b.data())))
@@ -388,12 +391,16 @@ void PrivateBoAdapter::ExecuteBatch(
     else
       RefreshIfStale(std::as_bytes(std::span(b)));
   }
+  const auto weight1 = NowNs();
   impl_->Fill(1, a);  // once for all slices, exactly as the fork's Process()
+  const auto fill1 = NowNs();
   std::size_t launched = 0, reaped = 0;
   const auto reap = [&] {
     const std::size_t slice = reaped;  // own the id before advancing the queue
     const auto slot = slice % 4;
+    const auto wait0 = NowNs();
     const auto state = impl_->runs[slot]->wait(impl_->timeout);
+    const auto wait1 = NowNs();
     if (state != ERT_CMD_STATE_COMPLETED) {
       impl_->failed = true;
       throw AdapterError(state == ERT_CMD_STATE_TIMEOUT ? ErrorKind::Timeout
@@ -404,7 +411,13 @@ void PrivateBoAdapter::ExecuteBatch(
     ++reaped;
     impl_->dma_possible = reaped != launched;
     impl_->outputs[slot]->sync(XCL_BO_SYNC_BO_FROM_DEVICE, kCBytes, 0);
+    const auto d2h1 = NowNs();
     consume(slice, {impl_->output_maps[slot], kCBytes});
+    const auto consume1 = NowNs();
+    st.batch_wait_ns.fetch_add(wait1 - wait0, std::memory_order_relaxed);
+    st.batch_d2h_ns.fetch_add(d2h1 - wait1, std::memory_order_relaxed);
+    st.batch_consume_ns.fetch_add(consume1 - d2h1, std::memory_order_relaxed);
+    st.batch_slices.fetch_add(1, std::memory_order_relaxed);
   };
   for (std::size_t s = 0; s < weights.size(); ++s) {
     if (launched - reaped == 4)
@@ -416,11 +429,15 @@ void PrivateBoAdapter::ExecuteBatch(
                      .bo);
     impl_->dma_possible =
         true;  // an exception from start can follow submission
+    const auto start0 = NowNs();
     run.start();
+    st.batch_start_ns.fetch_add(NowNs() - start0, std::memory_order_relaxed);
     ++launched;
   }
   while (reaped != launched)
     reap();
+  st.batch_weight_ns.fetch_add(weight1 - weight0, std::memory_order_relaxed);
+  st.batch_fill_ns.fetch_add(fill1 - weight1, std::memory_order_relaxed);
 }
 void PrivateBoAdapter::SetInputs(std::span<const std::byte> a,
                                  std::span<const std::byte> b) {

@@ -30,8 +30,15 @@ struct RequestStats {
   // Stream-side NPU stall per lane: 0 linear-z, 1 attention q/gate, 2 shared.
   std::atomic<std::uint64_t> lane_wait_ns[3]{{0}, {0}, {0}};
   std::atomic<std::uint64_t> lane_blocked[3]{{0}, {0}, {0}};
+  // XRT phase totals inside PrivateBoAdapter::ExecuteBatch (steady_clock ns):
+  // weight = B upload or resend, fill = A upload, start = run.start,
+  // wait = run.wait (device + queue), d2h = C sync back, consume = callback.
+  std::atomic<std::uint64_t> batch_weight_ns{0}, batch_fill_ns{0},
+      batch_start_ns{0}, batch_wait_ns{0}, batch_d2h_ns{0}, batch_consume_ns{0},
+      batch_slices{0};
 };
-// Lane of the Finish being enqueued on this thread (read when the stream wait is queued).
+// Lane of the Finish being enqueued on this thread (read when the stream wait
+// is queued).
 inline int& WaitLane() {
   static thread_local int lane = 0;
   return lane;
@@ -76,6 +83,13 @@ inline std::string TakeRequestLine() {
     lane_wait[i] = s.lane_wait_ns[i].exchange(0);
     lane_blocked[i] = s.lane_blocked[i].exchange(0);
   }
+  const auto b_weight = s.batch_weight_ns.exchange(0);
+  const auto b_fill = s.batch_fill_ns.exchange(0);
+  const auto b_start = s.batch_start_ns.exchange(0);
+  const auto b_wait = s.batch_wait_ns.exchange(0);
+  const auto b_d2h = s.batch_d2h_ns.exchange(0);
+  const auto b_consume = s.batch_consume_ns.exchange(0);
+  const auto slices = s.batch_slices.exchange(0);
   s.last_layer.store(-1);
   if (lin == 0 && proj == 0) {
     PublishNpuRuntimeStatus();  // request end; cheap without a publisher
@@ -88,7 +102,8 @@ inline std::string TakeRequestLine() {
       "finish_calls=%llu "
       "qgate_begins=%llu shared_begins=%llu finish_blocked=%llu "
       "finish_wait_ms=%.1f fence_ms=%.1f hostfunc_lat_ms=%.1f failures=%llu "
-      "stall_ms[linear=%.1f qgate=%.1f shared=%.1f] blocked[linear=%llu qgate=%llu shared=%llu]",
+      "stall_ms[linear=%.1f qgate=%.1f shared=%.1f] blocked[linear=%llu "
+      "qgate=%llu shared=%llu]",
       static_cast<unsigned long long>(chunks),
       static_cast<unsigned long long>(lin),
       static_cast<unsigned long long>(proj),
@@ -105,7 +120,19 @@ inline std::string TakeRequestLine() {
       static_cast<unsigned long long>(lane_blocked[1]),
       static_cast<unsigned long long>(lane_blocked[2]));
   // Fields appended at the end so existing parsers keep working.
-  auto line = std::string(text) + TakeRequestTelemetrySuffix();
+  char batch[256];
+  if (slices != 0)
+    std::snprintf(
+        batch, sizeof(batch),
+        " batch[slices=%llu weight_ms=%.1f fill_ms=%.1f start_ms=%.1f "
+        "wait_ms=%.1f d2h_ms=%.1f consume_ms=%.1f]",
+        static_cast<unsigned long long>(slices),
+        static_cast<double>(b_weight) / 1e6, static_cast<double>(b_fill) / 1e6,
+        static_cast<double>(b_start) / 1e6, static_cast<double>(b_wait) / 1e6,
+        static_cast<double>(b_d2h) / 1e6, static_cast<double>(b_consume) / 1e6);
+  else
+    batch[0] = '\0';
+  auto line = std::string(text) + batch + TakeRequestTelemetrySuffix();
   PublishNpuRuntimeStatus();  // request end; cheap without a publisher
   return line;
 }
