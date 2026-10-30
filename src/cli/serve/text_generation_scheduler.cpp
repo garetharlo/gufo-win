@@ -131,8 +131,9 @@ void PublishTerminal(const std::shared_ptr<ScheduledRequest>& request,
   }
   // Exactly-once decrement for every admitted request (success, failure,
   // cancellation, deadline, disconnect). Upstream-aligned guard.
-  if (request->counted_processing.exchange(false,
-                                           std::memory_order_acq_rel)) {
+  const bool was_processing =
+      request->counted_processing.exchange(false, std::memory_order_acq_rel);
+  if (was_processing) {
     detail::RequestsProcessing().fetch_sub(1, std::memory_order_relaxed);
   }
   request->output_condition.notify_all();
