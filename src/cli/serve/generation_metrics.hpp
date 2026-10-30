@@ -1,6 +1,8 @@
 #ifndef GUFO_SERVER_GENERATION_METRICS_HPP_
 #define GUFO_SERVER_GENERATION_METRICS_HPP_
 
+#include <atomic>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
 
@@ -8,6 +10,38 @@
 #include "src/core/json.hpp"
 
 namespace gufo::server {
+
+// Process-wide `/metrics` values, moved here from http_server.hpp so every
+// producer and the exposition share one definition, mirroring upstream
+// gufo-org/gufo (commit 03d7c727c4, "feat(serve): expose live token and
+// request metrics"). Token counters advance per executed prefill chunk and
+// per accepted generated token, so scrapes see work while requests are still
+// running. Per-request speed gauges are updated only when a request
+// finishes; they stay LAST-COMPLETED values, never live throughput.
+namespace detail {
+inline std::atomic<std::uint64_t>& TotalPromptTokens() {
+  static std::atomic<std::uint64_t> count{0};
+  return count;
+}
+inline std::atomic<std::uint64_t>& TotalGenTokens() {
+  static std::atomic<std::uint64_t> count{0};
+  return count;
+}
+inline std::atomic<double>& LastPromptSpeed() {
+  static std::atomic<double> val{0.0};
+  return val;
+}
+inline std::atomic<double>& LastGenSpeed() {
+  static std::atomic<double> val{0.0};
+  return val;
+}
+// Schedulers add their own deltas, so a draining scheduler and its
+// replacement can both contribute during a model reload.
+inline std::atomic<std::int64_t>& RequestsProcessing() {
+  static std::atomic<std::int64_t> count{0};
+  return count;
+}
+}  // namespace detail
 
 inline double PrefillTokensPerSecond(
     const TextGenerationBackend::Result& result) {
