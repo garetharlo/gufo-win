@@ -1,0 +1,75 @@
+# Temporary validation workflow (personal fork only; upstream untouched).
+#
+# Runs when pushes land on feat/live-generation-metrics. It builds the fork's
+# PRE-EXISTING attribute `checks.x86_64-linux.pr-tests` (cmake
+# BUILD_TESTING=ON, HIP off) --build --target check-pr + the ctest PR list
+# — compiles the telemetry backport at the exact pushed commit and executes
+# text_generation_scheduler_test (incl. the four new cases),
+# http_server_test and openai_chat_test.
+#
+# It does NOT run check-format / docs / dependency-inventory gates (the
+# composite `pr` attribute does), so pre-existing baseline formatting debt in
+# the fork cannot block the compile/test validation.
+#
+# Cleanup (after review): delete this file + the branch remote; nothing
+# outside the fork's Actions runtime state remains.
+name: telemetry-validation
+
+on:
+  push:
+    branches:
+      - feat/live-generation-metrics
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telemetry-validation-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  compile-and-run-cpu-tests:
+    name: Compile telemetry branch + run hosted CPU tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      # exact pushed commit (default of actions/checkout)
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      # same pinned cache/nix actions as the fork's existing ci.yml
+      - name: Compute CMake compiler cache key
+        id: ccache-key
+        shell: bash
+        run: echo "epoch-week=$(( $(date -u +%s) / 604800 ))" >> "$GITHUB_OUTPUT"
+
+      - name: Install Nix (same pinned action as ci.yml)
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          determinate: false
+
+      - name: Build + run check-pr tests
+        shell: bash
+        run: |
+          set -o pipefail
+          nix build .#checks.x86_64-linux.pr-tests \
+            --print-build-logs --cores 2 --max-jobs 2 2>&1 | tee nix-build.log
+          code=$?
+          echo "nix exit code: $code"
+
+          echo "----- ctest results (per target) -----"
+          grep -E 'tests/.*Passed|tests/.*Failed|Failed  [0-9]+ tests|tests passed' nix-build.log || true
+          echo "----- telemetry targets executed -----"
+          grep -E 'check-pr-tests>.*(text_generation_scheduler_test|http_server_test|openai_chat_test)' \
+            nix-build.log || true
+          echo "----- build/test failures (must be empty) -----"
+          grep -E '(error:|FAILED:|Assertion failed:)' nix-build.log || echo "(none)"
+
+          if [ "$code" -ne 0 ]; then
+            echo "::error::nix build .#checks.x86_64-linux.pr-tests failed (exit $code)"
+            exit "$code"
+          fi
+          cat ./result/result.txt 2>/dev/null || \
+            echo "(no result.txt emitted by this attribute; nix build success implies PASS)"
