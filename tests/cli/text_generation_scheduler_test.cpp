@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/cli/serve/generation_metrics.hpp"
 #include "src/cli/serve/stop_sequences.hpp"
 
 namespace {
@@ -1605,7 +1606,130 @@ void TestShutdownCancelsRunnerAcquisition() {
   stopped.get();
 }
 
+// ---------------------------------------------------------------------------
+// Process-wide /metrics counters (added for live telemetry; upstream-aligned
+// with gufo-org/gufo commit 03d7c727c4). Helpers:
+//   detail::TotalPromptTokens(), detail::TotalGenTokens(),
+//   detail::RequestsProcessing() live in src/cli/serve/generation_metrics.hpp.
+// ---------------------------------------------------------------------------
+
+namespace server_detail = gufo::server::detail;
+namespace server = gufo::server;
+
+void TestGenCounterAdvancesBeforeCompletion() {
+  auto control = std::make_shared<FakeControl>();
+  control->max_context = 512;
+  for (const bool speculative : {false, true}) {
+    control->multi_token_decode = speculative;
+    control->batched_multi_token_decode = speculative;
+    control->supports_batched_advance = speculative;
+    control->stop_after.reset();
+    auto scheduler = MakeScheduler(control, 1);
+    // Baseline per iteration: other tests (and earlier loop iterations of
+    // this one) legitimately consume the same process-wide counter.
+    const std::uint64_t baseline = server_detail::TotalGenTokens().load();
+    auto request =
+        scheduler->Submit({1, 10}, 40, 0.0F, {}, /*publish_token_pieces=*/true);
+    // Sample the counter inside the per-piece consumer callback: the counter
+    // must already include every consumed piece (i.e. it advances BEFORE the
+    // request completes) and must be monotonic mid-stream.
+    std::atomic<std::size_t> consumed{0};
+    const auto result = request.Wait([&](std::string_view piece) {
+      (void)piece;
+      const std::size_t seen = ++consumed;
+      const std::uint64_t now = server_detail::TotalGenTokens().load();
+      // Engine already counted at least the tokens that were published.
+      Expect(now >= baseline + seen,
+             "token counter advanced before this piece was consumed");
+      // Monotonic non-decreasing during streaming (relaxed reads).
+      return true;
+    });
+    Expect(result.tokens.size() == 40,
+           "fake runner produced the requested token count");
+    Expect(static_cast<std::uint64_t>(result.tokens.size()) ==
+               server_detail::TotalGenTokens().load() - baseline,
+           "final counter total equals this request's usage exactly");
+    Expect(consumed.load() >= 1 && consumed.load() <= 40,
+           "some pieces streamed, none beyond the produced tokens");
+    scheduler.reset();
+  }
+}
+
+void TestPromptCounterAdvancesPerExecutedChunk() {
+  const std::uint64_t baseline = server_detail::TotalPromptTokens().load();
+  auto control = std::make_shared<FakeControl>();
+  control->incremental_prefill = false;  // whole prompt is one chunk
+  control->max_context = 512;
+  auto scheduler = MakeScheduler(control, 1);
+  const auto result =
+      scheduler->Submit(std::vector<TextRunnerToken>(200, 1), 5, 0.0F).Wait();
+  Expect(result.completion_tokens == 5, "small generation completes");
+  // Non-incremental prefill executes the whole prompt exactly once; cached
+  // prefixes are never re-executed, so they must not add to the counter.
+  Expect(result.prefill_tokens == 200,
+         "fake runner prefill executed the full prompt");
+  Expect(server_detail::TotalPromptTokens().load() - baseline ==
+             static_cast<std::uint64_t>(result.prefill_tokens),
+         "prompt counter equals executed prefill chunks only");
+}
+
+void TestRequestsProcessingLifecycle() {
+  const std::int64_t baseline = server_detail::RequestsProcessing().load();
+  auto control = std::make_shared<FakeControl>();
+  control->max_context = 512;
+  control->block_prefill_label = 1;
+  auto scheduler = MakeScheduler(control, 1);
+  auto request = scheduler->Submit({1, 10}, 40, 0.0F);
+  // Parked inside a prefill chunk: admission happened, so exactly one
+  // request is visible as processing.
+  control->WaitForPrefill(1);
+  Expect(server_detail::RequestsProcessing().load() == baseline + 1,
+         "admitted request is counted as processing while parked");
+  control->ReleasePrefill();
+  const auto result = request.Wait();
+  Expect(result.completion_tokens == 40, "parked request finished normally");
+  Expect(server_detail::RequestsProcessing().load() == baseline,
+         "terminal state drains requests_processing to the baseline");
+}
+
+void TestCancellationDoesNotElevateRequestsProcessing() {
+  const std::int64_t baseline = server_detail::RequestsProcessing().load();
+  const std::uint64_t gen_baseline = server_detail::TotalGenTokens().load();
+  auto control = std::make_shared<FakeControl>();
+  control->max_context = 512;
+  auto scheduler = MakeScheduler(control, 1);
+  // Cancel after the first streamed piece: the scheduler observes the
+  // external check on its next step boundary, terminates the request and
+  // every already-accepted token has counted exactly once.
+  std::atomic<bool> cancel_requested{false};
+  auto request = scheduler->Submit(
+      {1, 10}, 40, 0.0F,
+      [&] { return cancel_requested.load(); }, /*publish_token_pieces=*/true);
+  std::atomic<std::size_t> pieces{0};
+  const auto result = request.Wait([&](std::string_view piece) {
+    (void)piece;
+    ++pieces;
+    if (pieces.load() == 1) {
+      cancel_requested.store(true, std::memory_order_release);
+    }
+    return true;
+  });
+  Expect(result.cancelled, "mid-generation cancellation is reported");
+  Expect(pieces.load() >= 1, "first piece streamed before cancelling");
+  Expect(server_detail::TotalGenTokens().load() - gen_baseline ==
+             static_cast<std::uint64_t>(result.tokens.size()),
+         "cancelled tokens remain counted exactly once");
+  Expect(result.tokens.size() == pieces.load(),
+         "streamed pieces match the cancelled result tokens");
+  Expect(server_detail::RequestsProcessing().load() == baseline,
+         "cancelled request drained the processing gauge");
+}
+
 int main() {
+  TestGenCounterAdvancesBeforeCompletion();
+  TestPromptCounterAdvancesPerExecutedChunk();
+  TestRequestsProcessingLifecycle();
+  TestCancellationDoesNotElevateRequestsProcessing();
   TestStopSequenceChunkBoundaries();
   TestStopSequencesPreserveExecutedState();
   TestStopPrefixFlushAndBatchIsolation();

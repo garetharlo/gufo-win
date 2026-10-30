@@ -143,30 +143,17 @@ private:
 };
 
 namespace detail {
-inline std::atomic<std::uint64_t>& TotalPromptTokens() {
-  static std::atomic<std::uint64_t> count{0};
-  return count;
-}
-inline std::atomic<std::uint64_t>& TotalGenTokens() {
-  static std::atomic<std::uint64_t> count{0};
-  return count;
-}
-inline std::atomic<double>& LastPromptSpeed() {
-  static std::atomic<double> val{0.0};
-  return val;
-}
-inline std::atomic<double>& LastGenSpeed() {
-  static std::atomic<double> val{0.0};
-  return val;
-}
+// Process-wide /metrics state moved to src/cli/serve/generation_metrics.hpp
+// (see the block comment there). Run-time gauges are updated on request
+// completion below; token counters are updated by the scheduler per executed
+// prefill chunk and per accepted token.
 }  // namespace detail
 
 inline void RecordServerMetrics(const TextGenerationBackend::Result& result) {
-  detail::TotalPromptTokens().fetch_add(result.prompt_tokens,
-                                        std::memory_order_relaxed);
-  detail::TotalGenTokens().fetch_add(result.completion_tokens,
-                                     std::memory_order_relaxed);
-
+  // NOTE: token counters are intentionally NOT advanced here — they would be
+  // per-completion values and hide live progress. The scheduler records each
+  // executed prefill chunk and each accepted generated token as it happens
+  // (upstream-aligned; see gufo-org/gufo commit 03d7c727c4).
   const double prompt_per_second = PrefillTokensPerSecond(result);
   const double tok_per_sec =
       (result.decode_ms > 0.0 && result.completion_tokens > 0)

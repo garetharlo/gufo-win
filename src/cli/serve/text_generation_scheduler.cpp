@@ -14,6 +14,7 @@
 #include <thread>
 #include <utility>
 
+#include "src/cli/serve/generation_metrics.hpp"
 #include "src/cli/serve/stop_sequences.hpp"
 
 namespace gufo::server {
@@ -91,6 +92,11 @@ struct ScheduledRequest {
   std::size_t buffered_output_bytes{0};
   std::exception_ptr failure;
   bool terminal{false};
+  // True once RequestsProcessing() was advanced for this request (admission).
+  // Atomic because cancellation can race a terminal step from the HTTP
+  // thread; the exchange in PublishTerminal guarantees exactly one decrement
+  // per admitted request and none for queued-only requests.
+  std::atomic<bool> counted_processing{false};
 };
 
 struct PendingClient {
@@ -122,6 +128,13 @@ void PublishTerminal(const std::shared_ptr<ScheduledRequest>& request,
     request->terminal = true;
     request->phase.store(TextRequestPhase::kTerminal,
                          std::memory_order_release);
+  }
+  // Exactly-once decrement for every admitted request (success, failure,
+  // cancellation, deadline, disconnect). Upstream-aligned guard.
+  const bool was_processing =
+      request->counted_processing.exchange(false, std::memory_order_acq_rel);
+  if (was_processing) {
+    detail::RequestsProcessing().fetch_sub(1, std::memory_order_relaxed);
   }
   request->output_condition.notify_all();
 }
@@ -474,6 +487,10 @@ struct TextGenerationScheduler::Impl {
             prefilling.size() + decoding.size() + capturing + 1;
         request->phase.store(TextRequestPhase::kAdmitted,
                              std::memory_order_release);
+        // The request now occupies engine work: expose it as
+        // llamacpp:requests_processing until a terminal path runs.
+        request->counted_processing.store(true, std::memory_order_release);
+        detail::RequestsProcessing().fetch_add(1, std::memory_order_relaxed);
         request->phase.store(request->runner_request.prefill_complete()
                                  ? TextRequestPhase::kDecodeReady
                                  : TextRequestPhase::kPrefilling,
@@ -529,6 +546,11 @@ struct TextGenerationScheduler::Impl {
       ++request->result.prefill_chunks;
       request->result.max_prefill_chunk_tokens = std::max(
           request->result.max_prefill_chunk_tokens, step.consumed_tokens);
+      // Live telemetry: the executed chunk advanced. Cached prefixes are not
+      // re-executed by the runner, so they never reach this site and are not
+      // counted as executed prefill (upstream-aligned).
+      detail::TotalPromptTokens().fetch_add(step.consumed_tokens,
+                                            std::memory_order_relaxed);
 
       if (decoder_runnable) {
         ++request->result.active_decode_prefill_chunks;
@@ -627,6 +649,10 @@ struct TextGenerationScheduler::Impl {
     }
     request->generated_output_bytes += selection.piece.size();
     request->result.tokens.push_back(selection.token);
+    // Live telemetry: one accepted token just finished (upstream-aligned).
+    // MTP/DFlash2/lookup publish every accepted token of a step through this
+    // same site, so each accepted token counts exactly once.
+    detail::TotalGenTokens().fetch_add(1, std::memory_order_relaxed);
     const auto piece = request->stop_filter.enabled()
                            ? request->stop_filter.Push(selection.piece)
                            : selection.piece;

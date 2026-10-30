@@ -985,6 +985,11 @@ HttpResponse LlamaMetrics(const HttpRequest&, TextGenerationBackend&) {
       << "# TYPE llamacpp:predicted_tokens_seconds gauge\n"
       << "llamacpp:predicted_tokens_seconds "
       << detail::LastGenSpeed().load(std::memory_order_relaxed) << "\n"
+      << "# HELP llamacpp:requests_processing Requests currently processed by "
+         "the engine\n"
+      << "# TYPE llamacpp:requests_processing gauge\n"
+      << "llamacpp:requests_processing "
+      << detail::RequestsProcessing().load(std::memory_order_relaxed) << "\n"
       << "# HELP llamacpp:kv_cache_usage_ratio KV cache usage ratio\n"
       << "# TYPE llamacpp:kv_cache_usage_ratio gauge\n"
       << "llamacpp:kv_cache_usage_ratio 0.0\n";
