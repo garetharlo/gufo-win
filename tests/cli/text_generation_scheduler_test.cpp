@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/cli/serve/generation_metrics.hpp"
 #include "src/cli/serve/stop_sequences.hpp"
 
 namespace {
